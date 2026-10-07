@@ -43,7 +43,7 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
   };
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-  client.once("ready", async () => {
+  client.once("clientReady", async () => {
     console.log(`[discord-bot] logado como ${client.user.tag}`);
     try {
       const rest = new REST({ version: "10" }).setToken(token);
@@ -66,7 +66,8 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       const a = await api("/api/analytics?days=1");
       if (!a.transactions || !a.transactions.length) return;
       const st = load();
-      const fresh = a.transactions.filter((t) => !st.last || Number(t.id) > Number(st.last)).reverse().slice(-3);
+      if (!st.last) { st.last = String(a.transactions[0].id); save(st); return; } // 1ª leitura: só marca
+      const fresh = a.transactions.filter((t) => Number(t.id) > Number(st.last)).reverse().slice(-3);
       st.last = String(a.transactions[0].id);
       save(st);
       for (const t of fresh) {
