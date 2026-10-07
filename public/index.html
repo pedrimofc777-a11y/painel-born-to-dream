@@ -379,10 +379,14 @@ loadRoles(); loadBalance();
 }catch{ $("members").textContent="—"; }
 }
 async function loadBalance(force){
-try{ const b=await (await api("/api/balance")).json(); $("k-disp").textContent=fmt(b.disponivel??0); $("k-pend").textContent=fmt(b.pendente??0); }
-catch{ $("k-disp").textContent="—"; $("k-pend").textContent="—"; }
+try{ const b=await (await api("/api/balance")).json(); $("k-disp").textContent=fmt(b.disponivel??0); }
+catch{ $("k-disp").textContent="—"; }
 try{
 const p=await (await api("/api/pending"+(force?"?fresh=1":""))).json();
+const items=p.items||[];
+const live=items.reduce((s,i)=>s+(i.robux||0),0);
+$("k-pend").textContent=fmt(items.length?live:(p.totalPending??p.pendingRobux??0));
+const em=$("k-pend").parentElement.querySelector("em"); if(em) em.textContent=`${items.length||p.pendingCount||0} vendas • a liberar`;
 $("k-tom").textContent=fmt(p.oldestRobux??0);
 $("k-tom-s").textContent="cai em "+(p.oldestDate||"—");
 }catch{ $("k-tom").textContent="—"; }
