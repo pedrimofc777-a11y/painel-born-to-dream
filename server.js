@@ -12,21 +12,25 @@ const COOKIE_RAW = process.env.ROBLOX_COOKIE || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const AI_PROVIDER = (process.env.AI_PROVIDER || "").toLowerCase();
-const WA_PHONE = (process.env.WA_PHONE || "").replace(/\D/g, "");
+const WA_PHONE = (process.env.WA_PHONE || "").split(",").map((s) => s.replace(/\D/g, "")).filter(Boolean);
 const WA_APIKEY = (process.env.WA_APIKEY || "").trim();
-// WhatsApp via CallMeBot (grátis): manda mensagem a cada venda nova
+// WhatsApp via CallMeBot (grátis): manda mensagem a cada venda nova, para todos os números
 async function sendWhats(text) {
-  if (!WA_PHONE || !WA_APIKEY) return { ok: false, error: "no-config" };
-  try {
-    const url = `https://api.callmebot.com/whatsapp.php?phone=${WA_PHONE}&text=${encodeURIComponent(text.slice(0, 900))}&apikey=${WA_APIKEY}`;
-    const r = await fetch(url);
-    const t = await r.text();
-    if (!r.ok) { console.log("[whats] erro", r.status); return { ok: false, error: "http-" + r.status }; }
-    return { ok: true };
-  } catch (e) { console.log("[whats] falha", e.message); return { ok: false, error: e.message }; }
+  if (!WA_PHONE.length || !WA_APIKEY) return { ok: false, error: "no-config" };
+  let ok = 0, err = null;
+  for (const phone of WA_PHONE) {
+    try {
+      const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodeURIComponent(text.slice(0, 900))}&apikey=${WA_APIKEY}`;
+      const r = await fetch(url);
+      if (r.ok) ok++;
+      else { err = "http-" + r.status; console.log("[whats] erro", r.status, phone); }
+    } catch (e) { err = e.message; console.log("[whats] falha", e.message); }
+    await new Promise((rr) => setTimeout(rr, 6000));
+  }
+  return ok ? { ok: true } : { ok: false, error: err };
 }
 async function waPoll() {
-  if (!WA_PHONE || !WA_APIKEY || !COOKIE_RAW) return;
+  if (!WA_PHONE.length || !WA_APIKEY || !COOKIE_RAW) return;
   try {
     const url = `https://economy.roblox.com/v2/groups/${encodeURIComponent(GROUP_ID)}/transactions?transactionType=Sale&limit=10`;
     const r = await economyFetch(url);
@@ -996,8 +1000,8 @@ app.listen(PORT, () => {
     setInterval(warm, 10 * 60 * 1000);
   }
   // avisos de venda no WhatsApp (CallMeBot)
-  if (WA_PHONE && WA_APIKEY && COOKIE_RAW) {
-    console.log("WhatsApp: ok");
+  if (WA_PHONE.length && WA_APIKEY && COOKIE_RAW) {
+    console.log(`WhatsApp: ok (${WA_PHONE.length} número(s))`);
     waPoll();
     setInterval(waPoll, 60 * 1000);
   } else {
