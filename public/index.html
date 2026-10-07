@@ -1,0 +1,701 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Born to Dream — Dashboard</title>
+<link rel="manifest" href="/manifest.webmanifest">
+<meta name="theme-color" content="#ff7a00">
+<link rel="icon" href="/icon-192.png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<link rel="stylesheet" href="/styles.css">
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+<style>
+#decor{position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:5;overflow:hidden}
+#decor span{position:absolute;top:-50px;font-size:24px;opacity:.35;animation:fall linear infinite}
+@keyframes fall{0%{opacity:0}10%{opacity:.55}85%{opacity:.5}100%{transform:translateY(105vh) rotate(50deg);opacity:0}}
+#greet{display:inline-block;margin-left:8px;font-size:11px;color:var(--orange2)}
+.tdots{display:inline-flex;gap:5px;align-items:center;padding:4px 2px}
+.tdots i{width:7px;height:7px;border-radius:50%;background:#ffa04d;animation:blink 1s infinite}
+.tdots i:nth-child(2){animation-delay:.2s}.tdots i:nth-child(3){animation-delay:.4s}
+@keyframes blink{0%,100%{opacity:.25}50%{opacity:1}}
+.top-clean{display:flex;align-items:center;gap:12px;padding:12px 16px;background:#101115;border:1px solid var(--line);border-radius:14px;flex-wrap:wrap}
+.logo{width:44px;height:44px;border-radius:12px;object-fit:cover;flex:none;background:linear-gradient(135deg,#ff7a00,#7a2b00);display:grid;place-items:center;font-weight:900;font-size:20px;color:#fff}
+.top-clean h1{margin:0;font-size:18px}
+.top-clean small{display:block;color:var(--muted);font-size:11px;margin-top:2px}
+.top-right{margin-left:auto;text-align:right;font-size:11px;color:var(--muted)}
+.top-right strong{display:block;color:#fff;font-size:13px}
+.top-btns{display:flex;gap:8px;align-items:center}
+.iconbtn{background:#1a1c21;border:1px solid var(--line);color:#eee;padding:9px 12px;border-radius:9px;cursor:pointer;font-size:13px}
+.iconbtn:hover{border-color:#6c482a}
+.banner{margin-top:12px;border-radius:14px;overflow:hidden;border:1px solid #312b25;position:relative;background:linear-gradient(120deg,#3a1402,#12060a 60%,#1a0e02);min-height:150px}
+.banner img{width:100%;height:190px;object-fit:cover;display:block}
+.banner .ov{position:absolute;inset:0;background:linear-gradient(180deg,rgba(0,0,0,.05),rgba(0,0,0,.6));display:flex;align-items:flex-end;padding:16px}
+.banner .ov h2{margin:0;font-size:22px;text-shadow:0 2px 12px #000}
+.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:11px;margin-top:13px}
+.card{text-align:center;cursor:pointer;transition:transform .15s,box-shadow .15s,border-color .15s}
+.card:hover{transform:translateY(-2px);border-color:#6c482a;box-shadow:0 4px 18px rgba(255,122,0,.18),inset 0 1px 0 rgba(255,160,77,.25);background:linear-gradient(180deg,#1d1712,#131418)}
+.card strong{font-size:34px}
+.card span{font-size:12px}
+.view{display:none}.view.active{display:block}
+.chart-tools{display:flex;gap:6px}
+.chart-tools button{background:#1a1c21;border:1px solid var(--line);color:#ddd;padding:6px 10px;border-radius:8px;cursor:pointer;font-size:11px}
+.chart-tools button.active{background:var(--orange);color:#111;font-weight:800;border-color:var(--orange)}
+.datatable{width:100%;border-collapse:collapse;font-size:14px}
+.datatable th{text-align:left;color:var(--muted);padding:8px;border-bottom:1px solid var(--line)}
+.datatable td{padding:8px;border-bottom:1px solid rgba(255,255,255,.05)}
+.datatable a{color:#ffa04d;text-decoration:none}.datatable a:hover{text-decoration:underline}
+.searchbar{display:flex;gap:8px;margin-bottom:10px;flex-wrap:wrap}
+.searchbar input,.searchbar select{background:#1a1c21;border:1px solid var(--line);color:#eee;padding:9px 11px;border-radius:9px;font-size:12px}
+.period{display:flex;gap:6px;align-items:center;flex-wrap:wrap;margin-top:10px}
+.period button{background:#1a1c21;border:1px solid var(--line);color:#ddd;padding:8px 11px;border-radius:8px;cursor:pointer;font-size:12px}
+.period button.active{background:var(--orange);color:#111;font-weight:800;border-color:var(--orange)}
+.period input{background:#1a1c21;border:1px solid var(--line);color:#eee;padding:8px 10px;border-radius:8px}
+.msg{font-size:12px;color:var(--muted);line-height:1.55}.msg.err{color:#ff9b9b}
+.tip{border:1px solid var(--line);background:#111318;border-radius:10px;padding:12px;font-size:12px;line-height:1.5;margin-bottom:8px}
+.tip b{display:block;margin-bottom:4px}
+.fbtn{background:#1a1c21;border:1px solid var(--line);color:#ddd;padding:7px 12px;border-radius:8px;cursor:pointer;font-size:11px}
+.fbtn.active{background:var(--orange);color:#111;font-weight:800;border-color:var(--orange)}
+.sug{position:relative;flex:1;min-width:200px}
+.sug input{width:100%;box-sizing:border-box}
+.suglist{position:absolute;top:100%;left:0;right:0;background:#181b21;border:1px solid var(--line);border-radius:0 0 10px 10px;z-index:20;overflow:hidden}
+.suglist div{padding:9px 11px;font-size:12px;cursor:pointer;border-bottom:1px solid rgba(255,255,255,.05)}
+.suglist div:hover{background:#241a10}
+#login{position:fixed;inset:0;background:radial-gradient(circle at 50% 20%,#241105,#060607);display:none;place-items:center;z-index:50;padding:16px}
+#login .box{background:#14161b;border:1px solid #3a2a1a;border-radius:16px;padding:30px 26px;width:min(380px,94vw);text-align:center}
+#login input{width:100%;background:#1a1c21;border:1px solid var(--line);color:#eee;padding:12px;border-radius:9px;margin:10px 0;box-sizing:border-box}
+#login button{width:100%;background:var(--orange);border:0;padding:12px;border-radius:9px;font-weight:800;cursor:pointer;font-size:14px}
+#modal{position:fixed;inset:0;background:rgba(0,0,0,.7);display:none;place-items:center;z-index:40;padding:12px}
+#modal .box{background:#14161b;border:1px solid var(--line);border-radius:14px;padding:20px;width:min(760px,96vw);max-height:86vh;overflow:auto}
+.cols2{display:grid;grid-template-columns:1fr 1fr;gap:14px}
+.chat{display:flex;flex-direction:column;gap:8px}
+#chatLog{background:#0e0f12;border:1px solid var(--line);border-radius:10px;padding:12px;min-height:160px;max-height:300px;overflow:auto}
+#chatLog .u{text-align:right;margin:6px 0}
+#chatLog .u span{background:#2a1a0e;border-radius:10px;padding:7px 10px;display:inline-block;font-size:12px}
+#chatLog .b span{background:#181b21;border:1px solid var(--line);border-radius:10px;padding:7px 10px;display:inline-block;font-size:12px}
+.profile{background:#111318;border:1px solid var(--line);border-radius:12px;padding:16px;display:grid;gap:6px;font-size:13px}
+#view-receita .panel{max-width:980px;margin:13px auto 0}
+.profile b{color:#fff}
+.panel canvas{height:300px!important}
+@media(max-width:1100px){.cols2{grid-template-columns:1fr}}
+@media(max-width:720px){
+.top-clean{gap:8px;padding:10px 12px}.top-clean h1{font-size:15px}.logo{width:36px;height:36px}
+.top-right{width:100%;text-align:left;margin-left:0}
+.top-btns{width:100%}.top-btns .iconbtn{flex:1;font-size:12px;padding:8px 6px}
+.banner img{height:130px}.banner .ov h2{font-size:17px}
+.card strong{font-size:22px}
+.cards{grid-template-columns:repeat(2,1fr);gap:8px}
+.period button{font-size:11px;padding:7px 9px}
+.period input{flex:1;min-width:120px}
+.panel{padding:12px}
+.panel-head{flex-direction:column;gap:8px;align-items:flex-start}
+#txwrap,#tx-mini,.products{overflow-x:auto}
+.datatable{font-size:12px;min-width:480px}
+.datatable td,.datatable th{padding:7px 6px;white-space:nowrap}
+#modal .box{padding:14px}
+.sug{min-width:100%}
+.grid,.lower{grid-template-columns:1fr!important}
+.topbar h1{font-size:19px}
+}
+</style>
+</head>
+<body>
+<div id="decor"></div>
+<div id="modal"><div class="box"><div style="display:flex;justify-content:space-between;align-items:center;gap:10px"><h3 id="mTitle">Item</h3><button onclick="document.getElementById('modal').style.display='none'" class="fbtn">Fechar</button></div><div id="mBody"></div></div></div>
+
+<aside class="sidebar">
+<div class="brand"><img src="/logo.png" alt="" style="width:38px;height:38px;border-radius:11px;object-fit:cover" onerror="this.outerHTML='<div class=\'logo\'>B</div>'"><div><strong>Born to Dream</strong><span>Dashboard</span></div></div>
+<nav id="nav">
+<button class="nav active" data-tab="dashboard">▦ <span>Dashboard</span></button>
+<button class="nav" data-tab="receita">◔ <span>Receita</span></button>
+<button class="nav" data-tab="vendas">◫ <span>Vendas</span></button>
+<button class="nav" data-tab="membros">♙ <span>Membros</span></button>
+<button class="nav" data-tab="produtos">◆ <span>Produtos</span></button>
+<button class="nav" data-tab="assistente">✦ <span>Assistente</span></button>
+</nav>
+<div class="sidebar-bottom"><div class="status-dot"></div><div><small>Estado</small><strong id="connection">A ligar...</strong></div></div>
+</aside>
+
+<main class="main">
+<div class="top-clean">
+<div id="saleBanner" style="display:none;flex-basis:100%;background:linear-gradient(90deg,#3a1c00,#5a2a00);border:1px solid var(--orange);border-radius:10px;padding:10px 14px;font-weight:800">💰 <span id="saleBannerTxt"></span> <button class="fbtn" onclick="document.getElementById('saleBanner').style.display='none'" style="float:right">x</button></div>
+<img src="/logo.png" alt="" class="logo" onerror="this.outerHTML='<div class=\'logo\'>B</div>'">
+<div><h1 id="groupName">Born to Dream</h1><small id="clock">—</small></div>
+<div class="top-right"><strong>Id do grupo: <span id="groupId">—</span></strong></div>
+<div class="top-btns"><button class="iconbtn" id="sfxBtn" title="Sons de clique">🖱️</button><button class="iconbtn" id="musicBtn" title="Música">🎵</button><button class="iconbtn" onclick="loadAll(true)" title="Atualizar agora">↻ Atualizar</button></div>
+</div>
+
+<div id="view-dashboard" class="view active">
+<div class="banner"><img src="/banner.jpg" alt="" onerror="this.remove()"><div class="ov"><div><span class="pill">● AO VIVO</span><h2 id="greetTitle">Visão geral do grupo</h2><p class="msg" id="status">A ligar...</p></div></div></div>
+<div class="period">
+<button data-pdays="1" class="active">Hoje</button><button data-pdays="7">7 dias</button><button data-pdays="15">15 dias</button><button data-pdays="30">30 dias</button><button data-pdays="90">90 dias</button>
+<input data-pdate type="date" title="Ver um dia específico"><button data-pgo>Ver dia</button>
+</div>
+<section class="cards">
+<article class="card" onclick="cardModal('hoje')"><span>Vendas hoje</span><strong id="k-hoje">—</strong><em id="k-hoje-s">quantidade de hoje</em></article>
+<article class="card" onclick="cardModal('periodo')"><span id="k-per-label">Período</span><strong id="k-per">—</strong><em id="k-per-s">soma das vendas</em></article>
+<article class="card" onclick="cardModal('periodo')"><span>Vendas</span><strong id="k-vendas">—</strong><em id="k-vendas-s">quantidade</em></article>
+<article class="card" onclick="cardModal('membros')"><span>Membros</span><strong id="members">—</strong><em id="k-mem-s">total do grupo</em></article>
+<article class="card" onclick="goTab('receita')"><span>Robux médio por venda</span><strong id="k-ticket">—</strong><em>por venda</em></article>
+<article class="card" onclick="cardModal('disp')"><span>Disponível</span><strong id="k-disp">—</strong><em>saldo do grupo</em></article>
+<article class="card" onclick="cardModal('pend')"><span>Pendente</span><strong id="k-pend">—</strong><em>a liberar</em></article>
+<article class="card" onclick="cardModal('prev')"><span>Previsão para cair robux</span><strong id="k-tom">—</strong><em id="k-tom-s">libera em 30 dias</em></article>
+</section>
+<section class="grid">
+<article class="panel"><div class="panel-head"><div><h3>Robux por dia</h3><span id="sub-dia">—</span></div><div class="chart-tools"><button data-ct="dia" data-t="bar" class="active">Barras</button><button data-ct="dia" data-t="line">Linha</button><button data-ct="dia" data-t="text">Texto</button></div></div><canvas id="chartDia"></canvas><div id="tblDia"></div></article>
+<article class="panel"><div class="panel-head"><div><h3>Robux por hora</h3><span>Hoje • São Paulo</span></div><div class="chart-tools"><button data-ct="hora" data-t="bar" class="active">Barras</button><button data-ct="hora" data-t="line">Linha</button><button data-ct="hora" data-t="text">Texto</button></div></div><canvas id="chartHora"></canvas><div id="tblHora"></div><p class="msg" id="bestHourLine"></p></article>
+</section>
+<section class="grid lower">
+<article class="panel"><div class="panel-head"><div><h3>Produtos</h3><span>resumo</span></div></div><div class="products" id="rank-mini"></div></article>
+<article class="panel"><div class="panel-head"><div><h3>Últimas vendas</h3><span id="sub-txmini">hoje</span></div></div><div id="tx-mini"></div></article>
+</section>
+</div>
+
+<div id="view-receita" class="view">
+<article class="panel"><div class="panel-head"><div><h3>Receita</h3><span id="rec-range">—</span></div><div class="chart-tools"><button data-ct="dia2" data-t="bar" class="active">Barras</button><button data-ct="dia2" data-t="line">Linha</button><button data-ct="dia2" data-t="text">Texto</button></div></div>
+<div class="period" style="margin-top:0">
+<button data-pdays="1">Hoje</button><button data-pdays="7">7 dias</button><button data-pdays="15">15 dias</button><button data-pdays="30">30 dias</button><button data-pdays="90">90 dias</button>
+<input data-pdate type="date" title="Ver um dia específico"><button data-pgo>Ver dia</button>
+</div>
+<div id="receita-detail"></div><canvas id="chartDia2" style="margin-top:10px"></canvas><div id="tblDia2"></div>
+<div id="receita-geral" style="margin-top:10px"></div></article>
+</div>
+
+<div id="view-vendas" class="view">
+<article class="panel"><div class="panel-head"><div><h3>Vendas</h3><span id="vendas-count">—</span></div></div>
+<div class="period" style="margin-top:0">
+<button data-pdays="1">Hoje</button><button data-pdays="7">7 dias</button><button data-pdays="15">15 dias</button><button data-pdays="30">30 dias</button><button data-pdays="90">90 dias</button>
+<input data-pdate type="date" title="Ver um dia específico"><button data-pgo>Ver dia</button>
+</div>
+<div class="searchbar"><input id="qTx" placeholder="Pesquisar comprador ou item..." style="flex:1"></div><div id="txwrap"></div></article>
+</div>
+
+<div id="view-membros" class="view">
+<article class="panel"><div class="panel-head"><div><h3>Membros</h3><span id="memCount">—</span></div></div>
+<div id="ownerBox"></div>
+<div class="searchbar"><div class="sug"><input id="qMemAll" placeholder="Digite o nome ou ID..." autocomplete="off"><div class="suglist" id="sugList" style="display:none"></div></div></div>
+<div id="profileBox"></div>
+<div class="searchbar"><select id="roleSel"></select><input id="qMem" placeholder="Filtrar lista abaixo..."><button class="fbtn" id="moreMem">Carregar mais</button></div>
+<div id="memList"></div></article>
+</div>
+
+<div id="view-produtos" class="view">
+<article class="panel"><div class="panel-head"><div><h3>Produtos</h3><span id="sub-prod">—</span></div></div>
+<div class="period" style="margin-top:0">
+<button data-pdays="1">Hoje</button><button data-pdays="7">7 dias</button><button data-pdays="15">15 dias</button><button data-pdays="30">30 dias</button><button data-pdays="90">90 dias</button>
+<input data-pdate type="date" title="Ver um dia específico"><button data-pgo>Ver dia</button>
+</div><div class="products" id="ranking"></div><p class="msg">Clique num item para ver o histórico completo.</p></article>
+</div>
+
+<div id="view-assistente" class="view">
+<article class="panel"><div class="panel-head"><div><h3>Assistente</h3><span>O que melhorar e erros</span></div><div style="display:flex;gap:6px"><button class="fbtn" onclick="loadDaily()">Atualizar análise</button></div></div>
+<div class="tip" id="dailyBox"><b>📊 Análise de hoje</b><span class="msg">Carregando...</span></div>
+<div id="assistant"></div>
+<div class="chat" style="margin-top:12px"><div style="display:flex;justify-content:flex-end"><button class="fbtn" onclick="clearChat()">Limpar conversa</button></div><div id="chatLog"></div>
+<div style="display:flex;gap:8px"><input id="chatIn" placeholder="Pergunte sobre o grupo..." style="flex:1;background:#1a1c21;border:1px solid var(--line);color:#eee;padding:10px;border-radius:9px"><button onclick="sendChat()" style="background:var(--orange);border:0;padding:10px 16px;border-radius:9px;font-weight:800;cursor:pointer">Enviar</button></div></div></article>
+</div>
+
+<footer>Born to Dream • Dashboard</footer>
+</main>
+
+<script>
+let DAYS=1, CUSTOM=null, DATA=null, LAST_TX=null, chartType={dia:"bar",hora:"bar",dia2:"bar"};
+let memCursor="", memLoaded=[], memRole="", ALL_TX=[], ALL_MODE=false;
+const fmt=n=>Number(n||0).toLocaleString("pt-BR");
+const fmt1=n=>Number(n||0).toLocaleString("pt-BR",{maximumFractionDigits:2});
+const $=id=>document.getElementById(id);
+async function api(p,o={}){ const h={}; if(o.body) h["Content-Type"]="application/json"; const r=await fetch(p,{...o,headers:{...h,...(o.headers||{})}}); return r; }
+
+document.querySelectorAll("#nav .nav").forEach(b=>b.onclick=()=>{ document.querySelectorAll("#nav .nav").forEach(x=>x.classList.remove("active")); b.classList.add("active"); document.querySelectorAll(".view").forEach(v=>v.classList.remove("active")); $("view-"+b.dataset.tab).classList.add("active"); window.scrollTo(0,0); const m=document.querySelector(".main"); if(m) m.scrollTo(0,0); requestAnimationFrame(()=>renderAllCharts()); });
+function goTab(tab){
+const btn=document.querySelector(`#nav .nav[data-tab="${tab}"]`);
+if(btn) btn.click(); else { document.querySelectorAll(".view").forEach(v=>v.classList.remove("active")); $("view-"+tab).classList.add("active"); }
+}
+function setRange(days, date){
+if(date){ CUSTOM={start:date,end:date}; } else { DAYS=days; CUSTOM=null; }
+document.querySelectorAll("[data-pdays]").forEach(x=>x.classList.toggle("active",!date&&parseInt(x.dataset.pdays,10)===DAYS));
+document.querySelectorAll("[data-pdate]").forEach(x=>{ if(!date) x.value=""; });
+ALL_MODE=false; loadAnalytics();
+}
+document.querySelectorAll("[data-pdays]").forEach(b=>b.onclick=()=>setRange(parseInt(b.dataset.pdays,10),null));
+document.querySelectorAll("[data-pgo]").forEach(b=>b.onclick=()=>{ const inp=b.parentElement.querySelector("[data-pdate]"); if(inp&&inp.value) setRange(null,inp.value); });
+document.querySelectorAll("[data-ct]").forEach(b=>b.onclick=()=>{ const k=b.dataset.ct; chartType[k]=b.dataset.t; document.querySelectorAll(`[data-ct="${k}"]`).forEach(x=>x.classList.remove("active")); b.classList.add("active"); renderAllCharts(); });
+// só 1 aba ativa por vez (as outras pausam a atualização sozinhas)
+const TABID=Math.random().toString(36).slice(2);
+function isLeader(){
+try{
+const t=JSON.parse(localStorage.getItem("dash_tab")||"{}");
+return !t.id||t.id===TABID||Date.now()-t.at>6000;
+}catch{ return true; }
+}
+setInterval(()=>{ try{ localStorage.setItem("dash_tab",JSON.stringify({id:TABID,at:Date.now()})); }catch{} },2000);
+// só Brasil (falha aberta: sem resposta, libera)
+async function brGate(){
+try{
+const ctrl=new AbortController(); const to=setTimeout(()=>ctrl.abort(),3000);
+const r=await fetch("https://ipapi.co/json/",{signal:ctrl.signal}); clearTimeout(to);
+const j=await r.json();
+const cc=(j&&(j.country||"")).toString().trim().toUpperCase();
+if(cc&&cc!=="BR"&&cc!=="BRAZIL"){ document.body.innerHTML="<div style='display:grid;place-items:center;height:100vh;background:#0c0d10;color:#fff;font-family:sans-serif'><div style='text-align:center'><h2>Acesso disponível apenas no Brasil.</h2></div></div>"; return false; }
+}catch{}
+return true;
+}
+setInterval(()=>{ try{
+$("clock").textContent=new Date().toLocaleString("pt-BR",{timeZone:"America/Sao_Paulo",weekday:"short",day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"});
+const parts=new Intl.DateTimeFormat("en-US",{timeZone:"America/Sao_Paulo",hour:"numeric",minute:"numeric",hour12:false}).formatToParts(new Date());
+const gv=t=>parseInt(((parts.find(p=>p.type===t)||{}).value||"0"),10)||0;
+const now=gv("hour")+gv("minute")/60;
+const g=(now>=5.5&&now<12)?"Bom dia":(now>=12&&now<19)?"Boa tarde":"Boa noite";
+$("greetTitle").textContent=g+(window._hgreet||"");
+}catch{} },1000);
+
+// sons de clique (bem baixos)
+let sfxOn=localStorage.getItem("sfx")!=="0";
+function paintSfx(){ $("sfxBtn").style.opacity=sfxOn?"1":"0.4"; }
+$("sfxBtn").onclick=()=>{ sfxOn=!sfxOn; localStorage.setItem("sfx",sfxOn?"1":"0"); paintSfx(); askNotify(); if(sfxOn) click(); };
+paintSfx();
+function click(){
+if(!sfxOn) return;
+try{
+if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch{ return; } }
+if(AC.state==="suspended") AC.resume();
+const o=AC.createOscillator(), g=AC.createGain();
+o.type="sine"; o.frequency.value=660; g.gain.value=0.0;
+o.connect(g); g.connect(AC.destination);
+g.gain.linearRampToValueAtTime(0.015,AC.currentTime+0.01);
+g.gain.linearRampToValueAtTime(0.0,AC.currentTime+0.09);
+o.start(); o.stop(AC.currentTime+0.1);
+}catch{}
+}
+document.addEventListener("click",e=>{ if(e.target.closest("button,a,.nav,.product")) click(); });
+// alerta de venda: apito alto + voz + notificação do sistema
+if("Notification" in window && Notification.permission==="default"){ document.addEventListener("pointerdown",()=>{ try{Notification.requestPermission();}catch{} },{once:true}); }
+// destrava o áudio no 1º gesto (navegador bloqueia som antes disso)
+["pointerdown","keydown","touchstart"].forEach(ev=>document.addEventListener(ev,()=>{
+try{
+if(!AC){ AC=new (window.AudioContext||window.webkitAudioContext)(); }
+if(AC&&AC.state==="suspended") AC.resume();
+if("speechSynthesis" in window){ try{ speechSynthesis.getVoices(); }catch{} }
+if("Notification" in window&&Notification.permission==="default"){ try{Notification.requestPermission();}catch{} }
+}catch{}
+},{once:false}));
+function saleAlert(t){
+try{
+document.body.style.transition="background .3s"; document.body.style.background="#2a1503";
+setTimeout(()=>{ document.body.style.background=""; },600);
+$("saleBannerTxt").textContent=`VENDA NOVA: ${t.assetName} • ${t.buyerName} (${t.robux})`;
+$("saleBanner").style.display="block";
+if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch{} }
+if(AC){
+if(AC.state==="suspended") AC.resume();
+clearTimeout(padTimer);
+const notes=[523.25,659.25,783.99,1046.5];
+notes.forEach((fr,i)=>{
+const o=AC.createOscillator(), g=AC.createGain();
+o.type="triangle"; o.frequency.value=fr; g.gain.value=0.0;
+o.connect(g); g.connect(AC.destination);
+const s=AC.currentTime+0.05+i*0.16;
+g.gain.linearRampToValueAtTime(0.14,s+0.02);
+g.gain.linearRampToValueAtTime(0.0,s+0.15);
+o.start(s); o.stop(s+0.17);
+});
+setTimeout(()=>{ if(musicOn) restartPad(); },1400);
+}
+if("speechSynthesis" in window){ try{ const u=new SpeechSynthesisUtterance("Venda nova"); u.lang="pt-BR"; u.rate=1.1; speechSynthesis.speak(u); }catch{} }
+if("Notification" in window && Notification.permission==="granted"){
+try{ new Notification("💰 VENDA NOVA",{body:`${t.assetName} • ${t.buyerName} (${t.robux})`}); }catch{}
+}
+}catch{}
+}
+// música relaxante (3 faixas suaves que alternam, volume bem baixo)
+let AC=null, musicOn=false, padTimer=null, trackIdx=0;
+const TRACKS=[
+[[220,261.6,329.6],[174.6,220,261.6],[196,246.9,293.7],[146.8,174.6,220]],
+[[261.6,329.6,392],[196,261.6,329.6],[220,277.2,329.6],[174.6,220,261.6]],
+[[329.6,415.3,493.9],[261.6,329.6,392],[293.7,369.9,440],[196,246.9,293.7]],
+];
+function askNotify(){ if("Notification" in window&&Notification.permission==="default"){ try{ const p=Notification.requestPermission(); if(p&&p.then) p.then(()=>{}); }catch{} } }
+$("musicBtn").onclick=()=>{ musicOn?stopMusic():startMusic(); askNotify(); };
+function startMusic(){
+if(!AC){ try{ AC=new (window.AudioContext||window.webkitAudioContext)(); }catch{ return; } }
+if(AC.state==="suspended") AC.resume();
+if(musicOn) return; musicOn=true; localStorage.setItem("music","1"); $("musicBtn").textContent="🎵";
+startPad();
+}
+function startPad(){
+if(!musicOn) return;
+let i=0;
+const play=()=>{ if(!musicOn) return; const g=AC.createGain(); g.gain.value=0.0; const f=AC.createBiquadFilter(); f.type="lowpass"; f.frequency.value=700; f.connect(g); g.connect(AC.destination); g.gain.linearRampToValueAtTime(0.012,AC.currentTime+4); g.gain.linearRampToValueAtTime(0.0,AC.currentTime+4.5);
+TRACKS[trackIdx%TRACKS.length][i%4].forEach(fr=>{ const o=AC.createOscillator(); o.type="sine"; o.frequency.value=fr; o.connect(f); o.start(); o.stop(AC.currentTime+4.6); }); i++; if(i%4===0) trackIdx++; padTimer=setTimeout(play,3800); };
+play();
+}
+function restartPad(){ clearTimeout(padTimer); startPad(); }
+if(localStorage.getItem("music")==="1"){ musicOn=true; $("musicBtn").textContent="🎵"; }
+function stopMusic(){ musicOn=false; localStorage.setItem("music","0"); clearTimeout(padTimer); $("musicBtn").textContent="🔇"; if(AC) AC.suspend(); }
+function pauseMusic(){ clearTimeout(padTimer); if(AC) AC.suspend(); }
+function resumeMusic(){ if(!musicOn||!AC) return; if(AC.state==="suspended") AC.resume(); restartPad(); }
+document.addEventListener("visibilitychange",()=>{ if(document.hidden) pauseMusic(); else resumeMusic(); });
+window.addEventListener("blur",()=>pauseMusic());
+window.addEventListener("focus",()=>resumeMusic());
+setTimeout(()=>{ try{ startMusic(); }catch{} },1500);
+["pointerdown","keydown"].forEach(ev=>document.addEventListener(ev,()=>{ if(!musicOn){ try{startMusic();}catch{} } },{once:true}));
+
+const YOPTS={beginAtZero:true,grace:"15%",grid:{color:"rgba(255,255,255,.08)"},ticks:{color:"#ffffff",maxTicksLimit:6,font:{size:18,weight:"700"},callback:v=>Number.isInteger(v)?fmt(v):""}};
+const XOPTS={grid:{display:false},ticks:{color:"#e2e5ec",font:{size:14},maxRotation:0,minRotation:0,autoSkip:true,maxTicksLimit:10}};
+function drawChart(id,tblId,labels,vals,type){
+const cv=$(id), tb=$(tblId); if(!cv) return;
+if(cv._c){cv._c.destroy();cv._c=null;}
+if(type==="text"){ cv.style.display="none"; tb.innerHTML=`<table class="datatable"><tr><th>Período</th><th style="text-align:right">Valor</th></tr>${labels.map((l,i)=>`<tr><td>${Array.isArray(l)?l.join(" "):l}</td><td style="text-align:right">${fmt(vals[i])}</td></tr>`).join("")}</table>`; return; }
+cv.style.display="block"; tb.innerHTML="";
+const ctx=cv.getContext("2d"); const g=ctx.createLinearGradient(0,0,0,300); g.addColorStop(0,"#ff7a00"); g.addColorStop(1,"rgba(255,122,0,0.10)");
+const maxT=labels.length>30?7:10;
+const xScale={grid:{display:false},ticks:{color:"#ffffff",font:{size:16,weight:"600"},maxRotation:0,minRotation:0,autoSkip:true,maxTicksLimit:maxT}};
+cv._c=new Chart(cv,{type:type==="line"?"line":"bar",data:{labels: type==="line"?labels.map(l=>Array.isArray(l)?l.join(" "):l):labels,datasets:[{data:vals,backgroundColor:type==="line"?"rgba(255,122,0,0.25)":g,borderColor:"#ff7a00",borderWidth:2,borderRadius:7,barPercentage:0.65,categoryPercentage:0.8,fill:type==="line",tension:.35,pointRadius:4,pointHoverRadius:7,pointHitRadius:20}]},options:{layout:{padding:{left:6,right:14,top:4}},plugins:{legend:{display:false},tooltip:{enabled:true,mode:"index",intersect:false,callbacks:{label:c=>" "+fmt(c.raw)}}},interaction:{mode:"index",intersect:false},scales:{x:xScale,y:YOPTS}}});
+}
+function renderAllCharts(){
+if(!DATA) return;
+const dl=DATA.byDay.map(d=>[d.label,d.weekday]), dv=DATA.byDay.map(d=>d.robux);
+drawChart("chartDia","tblDia",dl,dv,chartType.dia);
+const single=DATA.days===1;
+drawChart("chartDia2","tblDia2",single?DATA.byHour.map(h=>h.label):dl,single?DATA.byHour.map(h=>h.robux):dv,chartType.dia2);
+drawChart("chartHora","tblHora",DATA.byHour.map(h=>h.label),DATA.byHour.map(h=>h.robux),chartType.hora);
+if(single){ const s=$("rec-range"); if(s) s.textContent=(DATA.range||"hoje")+" • por hora"; }
+}
+
+async function loadGroup(){
+try{
+const d=await (await api("/api/group")).json();
+$("groupName").textContent=d.displayName||d.name||"Born to Dream";
+$("groupId").textContent=d.id||"—";
+$("members").textContent=fmt(d.memberCount??0);
+$("memCount").textContent=fmt(d.memberCount??0)+" membros no total";
+const kMem=$("k-mem-s"); if(kMem) kMem.textContent="total do grupo";
+const o=d.owner;
+$("ownerBox").innerHTML=o?`<p class="msg">Dono: <a href="https://www.roblox.com/users/${o.userId}/profile" target="_blank" style="color:#ffa04d">${o.displayName} (@${o.username})</a> <span style="color:#777">ID ${o.userId}</span></p>`:`<p class="msg err">Dono não retornado.</p>`;
+loadRoles(); loadBalance();
+}catch{ $("members").textContent="—"; }
+}
+async function loadBalance(force){
+try{ const b=await (await api("/api/balance")).json(); $("k-disp").textContent=fmt(b.disponivel??0); $("k-pend").textContent=fmt(b.pendente??0); }
+catch{ $("k-disp").textContent="—"; $("k-pend").textContent="—"; }
+try{
+const p=await (await api("/api/pending"+(force?"?fresh=1":""))).json();
+$("k-tom").textContent=fmt(p.oldestRobux??0);
+$("k-tom-s").textContent="cai em "+(p.oldestDate||"—");
+}catch{ $("k-tom").textContent="—"; }
+}
+
+async function loadAnalytics(){
+let url="/api/analytics?"+(CUSTOM?`start=${CUSTOM.start}&end=${CUSTOM.end}`:`days=${DAYS}`);
+$("status").textContent="↻ Buscando vendas...";
+let r,a;
+try{ r=await api(url); a=await r.json(); }catch{ $("status").textContent="Falha de rede."; return; }
+if(!r.ok||a.available===false){ $("status").textContent="⚠ Dados indisponíveis no momento."; $("connection").textContent="Instável"; return; }
+if(a.partial||a.sales==null||a.stale){ $("status").textContent="↻ Sincronizando com o Roblox, tentando de novo em instantes..."; clearTimeout(window._retryT); window._retryT=setTimeout(()=>{ if(isLeader()) loadAnalytics(); },15000); }
+const prevFirst=LAST_TX;
+const isNew=prevFirst&&a.transactions.length&&a.transactions[0].id!==prevFirst;
+if(a.transactions.length){
+LAST_TX=a.transactions[0].id;
+if(isNew){ const t=a.transactions[0]; saleAlert(t); loadDaily(); loadBalance(true); }
+}
+DATA=a; ALL_MODE=false;
+$("connection").textContent="Ligado";
+const when=a.savedAt?new Date(a.savedAt).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"";
+$("status").textContent=(window._open?"🔓 sem chave • ":"")+(a.stale?`⚠ offline — salvos de ${when} • `:`✓ `)+`${fmt(a.sales??0)} vendas • ${a.range||a.days+" dias"}${isNew?" • Nova venda!":""}`;
+$("k-per-label").textContent=`Período (${a.days} dia${a.days>1?"s":""})`;
+$("k-hoje").textContent=fmt(a.todayCount??0);
+$("k-hoje-s").textContent=`${fmt(a.revenueToday)} hoje`;
+$("k-per").textContent=fmt(a.revenuePeriod);
+$("k-per-s").textContent=`${fmt(a.sales)} vendas`;
+$("k-vendas").textContent=fmt(a.sales);
+$("k-vendas-s").textContent=`${fmt(a.salesTotalRobux)} no período`;
+$("k-ticket").textContent=fmt1(a.ticketMedio);
+$("sub-dia").textContent=a.range||`${a.days} dias`;
+$("rec-range").textContent=a.range||`${a.days} dias`;
+$("sub-txmini").textContent="5 mais recentes";
+renderAllCharts(); renderTx($("qTx").value||""); renderRanking(); buildAssistant(a);
+const tot=(a.byHour||[]).reduce((s,h)=>s+h.robux,0);
+$("bestHourLine").textContent=!tot?"Sem vendas hoje ainda.":"Melhor horário hoje: "+[...a.byHour].sort((x,y)=>y.robux-x.robux)[0].label+" com "+fmt([...a.byHour].sort((x,y)=>y.robux-x.robux)[0].robux)+".";
+$("receita-detail").innerHTML=`<p class="msg"><b style="color:#fff;font-size:18px">Hoje: ${fmt(a.revenueToday)}</b> em ${fmt(a.todayCount??0)} vendas<br><b style="color:#fff;font-size:18px">Período: ${fmt(a.revenuePeriod)}</b> em ${fmt(a.sales)} vendas<br>Robux médio por venda: <b style="color:#fff">${fmt1(a.ticketMedio)}</b></p>`;
+$("receita-geral").innerHTML=`<table class="datatable"><tr><th>Dia</th><th>Data</th><th style="text-align:right">Valor</th></tr>${a.byDay.map(d=>`<tr><td>${d.weekday}</td><td>${d.date}</td><td style="text-align:right">${fmt(d.robux)}</td></tr>`).join("")}</table>`;
+$("vendas-count").textContent=`${fmt(a.sales)} no filtro`;
+}
+
+// vendas do filtro atual (dia ou período)
+function rangeSet(){ return new Set((DATA?.byDay||[]).map(d=>d.date)); }
+function txRow(t){ const d=new Date(t.created).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}); const item=t.assetId?`<a href="https://www.roblox.com/catalog/${t.assetId}/x" target="_blank">${t.assetName}</a>`:t.assetName; const buyer=(t.buyerId&&t.buyerType==="User")?`<a href="https://www.roblox.com/users/${t.buyerId}/profile" target="_blank">${t.buyerName}</a>`:(t.buyerName||"—"); return `<tr><td>${d}</td><td>${item}</td><td>${buyer}</td><td style="text-align:right">${fmt(t.robux)}</td></tr>`; }
+function renderTx(q){
+if(ALL_MODE) return renderTxAll(q);
+q=(q||"").toLowerCase();
+const pool=(DATA?.salesList&&DATA.salesList.length?DATA.salesList:(DATA?.transactions||[]));
+const all=pool.filter(t=>(t.buyerName||"").toLowerCase().includes(q)||(t.assetName||"").toLowerCase().includes(q));
+const tx=all.slice(0,300);
+$("txwrap").innerHTML=tx.length?`<table class="datatable"><tr><th>Horário</th><th>Item</th><th>Comprador</th><th style="text-align:right">Valor</th></tr>${tx.map(txRow).join("")}</table><p class="msg">Mostrando ${tx.length} de ${fmt(all.length)} no filtro.</p>`:"<p class='msg'>Nada neste filtro.</p>";
+const mini=(DATA?.transactions||[]).slice(0,5);
+$("tx-mini").innerHTML=mini.length?`<table class="datatable">${mini.map(txRow).join("")}</table>`:"<p class='msg'>Sem vendas ainda.</p>";
+}
+function renderTxAll(q){
+q=(q||"").toLowerCase();
+const tx=ALL_TX.filter(t=>(t.buyerName||"").toLowerCase().includes(q)||(t.assetName||"").toLowerCase().includes(q));
+$("txwrap").innerHTML=`<table class="datatable"><tr><th>Horário</th><th>Item</th><th>Comprador</th><th style="text-align:right">Valor</th></tr>${tx.slice(0,500).map(txRow).join("")}</table><p class="msg">Mostrando ${Math.min(tx.length,500)} de ${fmt(tx.length)}.</p>`;
+}
+$("qTx").oninput=e=>renderTx(e.target.value);
+
+function renderRanking(){
+const rk=DATA?.ranking||[];
+const html=rk.length?rk.map((p,i)=>`<div class="product" style="cursor:pointer" onclick="openProduct('${p.assetId}')"><span class="rank">#${i+1}</span><div><b>${p.name}</b><small>${fmt(p.vendas)} vendas • ${fmt(p.robux)}</small></div><strong>${fmt(p.robux)}</strong></div>`).join(""):"<p class='msg'>Sem vendas.</p>";
+$("ranking").innerHTML=html;
+$("rank-mini").innerHTML=rk.slice(0,3).map((p,i)=>`<div class="product" style="cursor:pointer" onclick="openProduct('${p.assetId}')"><span class="rank">#${i+1}</span><div><b>${p.name}</b><small>${fmt(p.vendas)} vendas</small></div><strong>${fmt(p.robux)}</strong></div>`).join("")||"<p class='msg'>—</p>";
+$("sub-prod").textContent=`${rk.length} itens no período — clique para detalhes`;
+}
+async function cardModal(kind){
+const T=$("mTitle"), B=$("mBody");
+$("modal").style.display="grid";
+const tbl=(rows)=>`<div style="max-height:340px;overflow:auto"><table class="datatable"><tr><th>Horário</th><th>Item</th><th>Comprador</th><th style="text-align:right">Valor</th></tr>${rows.map(txRow).join("")}</table></div>`;
+if(kind==="hoje"||kind==="periodo"){
+const list=kind==="hoje"?((DATA?.todayList||[])):((DATA?.salesList&&DATA.salesList.length?DATA.salesList:(DATA?.transactions||[])));
+T.textContent=kind==="hoje"?"Vendas de hoje":`Vendas do período (${DATA?.days||""} dias)`;
+B.innerHTML=`<p class="msg">${list.length} vendas • ${fmt(list.reduce((s,t)=>s+t.robux,0))}</p>`+(list.length?tbl(list.slice(0,300)):"<p class='msg'>Nada aqui.</p>");
+}else if(kind==="membros"){
+T.textContent="Membros";
+const list=(memLoaded||[]).slice(0,50);
+B.innerHTML=`<p class="msg">${$("members").textContent} no total — mostrando ${list.length}. Pesquise na aba Membros para ver todos.</p><div style="max-height:340px;overflow:auto"><table class="datatable"><tr><th>ID</th><th>Usuário</th><th>Nome</th></tr>${list.map(m=>`<tr><td>${m.userId}</td><td>@${m.username}</td><td>${m.displayName}</td></tr>`).join("")}</table></div>`;
+}else if(kind==="disp"||kind==="pend"||kind==="prev"){
+T.textContent=kind==="disp"?"Disponível":kind==="pend"?"Pendente":"Previsão de liberação";
+B.innerHTML="<p class='msg'>Carregando...</p>";
+try{
+const p=await (await api("/api/pending")).json();
+if(kind==="disp"){
+const last=(DATA?.transactions||[]).slice(0,10);
+B.innerHTML=`<p class="msg"><b style="color:#fff;font-size:20px">${$("k-disp").textContent}</b> disponíveis no grupo</p><h4>Últimas compras</h4>`+(last.length?tbl(last):"<p class='msg'>—</p>")+`<p class="msg">O Roblox libera em ~30 dias após cada venda.</p>`;
+}else if(kind==="pend"){
+const items=p.items||[];
+B.innerHTML=`<p class="msg"><b style="color:#fff;font-size:20px">${$("k-pend").textContent}</b> pendentes em ${items.length} vendas${p.stale?" • ⚠ salvos de "+new Date(p.savedAt).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):""}</p><div style="max-height:340px;overflow:auto"><table class="datatable"><tr><th>Item</th><th>Libera em</th><th style="text-align:right">Valor</th></tr>${items.slice(0,200).map(i=>`<tr><td>${i.assetName}</td><td>${i.release}</td><td style="text-align:right">${fmt(i.robux)}</td></tr>`).join("")}</table></div>`;
+}else{
+const up=p.upcoming||[];
+const tot=up.reduce((s,u)=>s+u.robux,0);
+B.innerHTML=`<p class="msg">Total previsto: <b style="color:#fff;font-size:18px">${fmt(p.totalPending??tot)}</b> (libera até ${p.lastDate||"—"}, ±1 mês)</p><div style="max-height:340px;overflow:auto"><table class="datatable"><tr><th>Cai em</th><th style="text-align:right">Valor</th></tr>${up.map((u,i)=>`<tr${i===0?` style="background:rgba(255,122,0,.12)"`:""}><td>${u.date}${i===0?" ◀ próxima":""}</td><td style="text-align:right">${fmt(u.robux)}</td></tr>`).join("")}</table></div>`;
+}
+}catch{ B.innerHTML="<p class='msg err'>Não consegui carregar. Tente de novo.</p>"; }
+}
+}
+async function openProduct(id){
+if(!id||id==="null") return;
+$("mTitle").textContent="Carregando..."; $("modal").style.display="grid"; $("mBody").innerHTML="<p class='msg'>Buscando histórico...</p>";
+const fq=CUSTOM?`start=${CUSTOM.start}&end=${CUSTOM.end}`:`days=${DAYS}`;
+let r,j;
+try{ r=await api("/api/product/"+id+"/sales?"+fq); j=await r.json(); }catch{ j=null; }
+if(!r||!r.ok||!j||j.error){ $("mTitle").textContent="Item"; $("mBody").innerHTML=`<p class="msg err">Não consegui carregar agora (limite do Roblox). <a href="#" onclick="openProduct('${id}');return false" style="color:#ffa04d">Tentar de novo</a></p>`; return; }
+$("mTitle").innerHTML=`${j.name||"Item"} ${j.assetId&&j.assetId!=="null"?`<a href="https://www.roblox.com/catalog/${j.assetId}/x" target="_blank" class="fbtn" style="text-decoration:none;font-size:12px">Abrir UGC ↗</a>`:""}`;
+$("mBody").innerHTML=`<p class="msg">${fmt(j.vendas)} vendas • ${fmt(j.robux)} no total ${j.range?`• ${j.range}`:""}</p><div class="cols2">
+<div><h4>Vendas por dia (${(j.byDay||[]).length} dias)</h4><div style="max-height:320px;overflow:auto"><table class="datatable"><tr><th>Dia</th><th style="text-align:right">Vendas</th><th style="text-align:right">Valor</th></tr>${(j.byDay||[]).map(d=>`<tr><td>${d.date}</td><td style="text-align:right">${d.vendas}</td><td style="text-align:right">${fmt(d.robux)}</td></tr>`).join("")}</table></div></div>
+<div><h4>Quem comprou (${(j.buyers||[]).length})</h4><div style="max-height:320px;overflow:auto"><table class="datatable"><tr><th>Horário</th><th>Comprador</th></tr>${(j.buyers||[]).map(b=>`<tr><td>${new Date(b.at).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"})}</td><td>${b.id?`<a href="https://www.roblox.com/users/${b.id}/profile" target="_blank">${b.name}</a>`:b.name}</td></tr>`).join("")}</table></div></div>
+</div>`;
+}
+
+function buildAssistant(a){
+const tips=[]; const days=a.byDay||[];
+if(days.length){
+const best=[...days].sort((x,y)=>y.robux-x.robux)[0];
+const worst=[...days].sort((x,y)=>x.robux-y.robux)[0];
+tips.push({t:"📅 Melhor dia",d:`${best.date} (${best.weekday}) com ${fmt(best.robux)}.`});
+if(worst.robux===0) tips.push({t:"⚠ Dia zerado",d:`${worst.date} (${worst.weekday}) sem vendas.`});
+const h=Math.floor(days.length/2);
+const s1=days.slice(0,h).reduce((s,d)=>s+d.robux,0), s2=days.slice(h).reduce((s,d)=>s+d.robux,0);
+if(s1>0&&s2<s1) tips.push({t:"📉 Queda de renda",d:`Caiu ${Math.round((1-s2/s1)*100)}% de ${fmt(s1)} para ${fmt(s2)}.`});
+}
+$("assistant").innerHTML=tips.map(x=>`<div class="tip"><b>${x.t}</b>${x.d}</div>`).join("");
+}
+async function loadDaily(){
+try{
+const d=await (await api("/api/daily-summary")).json();
+if(d.error){ $("dailyBox").innerHTML="<b>📊 Análise de hoje</b><span class='msg'>Indisponível no momento.</span>"; return; }
+const cmp=d.total>=d.yTotal?`📈 ${fmt(d.total-d.yTotal)} acima de ontem`:`📉 ${fmt(d.yTotal-d.total)} abaixo de ontem`;
+$("dailyBox").innerHTML=`<b>📊 Análise de hoje (${d.date})</b>
+<b style="font-size:16px;color:#fff">${d.sales} vendas • ${fmt(d.total)}</b><br>
+Ticket ${fmt1(d.ticket)} • Ontem: ${d.ySales} vendas • ${fmt(d.yTotal)} (${cmp})<br>
+Melhor horário: <b>${d.bestHour||"—"}</b> • ${d.distinct} itens • Top: <b>${d.top?d.top.name+" ("+d.top.vendas+"x)":"—"}</b>`;
+}catch{ $("dailyBox").innerHTML="<b>📊 Análise de hoje</b><span class='msg'>Indisponível no momento.</span>"; }
+}
+function chatSave(role,text){
+try{
+const h=JSON.parse(localStorage.getItem("chat_hist")||"[]");
+h.push({role,text,at:Date.now()});
+localStorage.setItem("chat_hist",JSON.stringify(h.slice(-40)));
+}catch{}
+}
+function loadChatHistory(){
+let h=[]; try{ h=JSON.parse(localStorage.getItem("chat_hist")||"[]"); }catch{}
+if(!h.length) h=[{role:"b",text:"Olá! Pergunte qualquer coisa sobre o grupo: saldo, membros, produtos, vendas, horários."}];
+$("chatLog").innerHTML=h.map(m=>m.role==="u"?`<div class="u"><span>${m.text.replace(/</g,"&lt;")}</span></div>`:`<div class="b"><span>${m.text.replace(/</g,"&lt;")}</span></div>`).join("");
+$("chatLog").scrollTop=9999;
+}
+function clearChat(){ localStorage.removeItem("chat_hist"); loadChatHistory(); }
+async function sendChat(){
+const inp=$("chatIn"); const msg=inp.value.trim(); if(!msg) return; inp.value="";
+$("chatLog").innerHTML+=`<div class="u"><span>${msg.replace(/</g,"&lt;")}</span></div>`;
+chatSave("u",msg);
+const tp=document.createElement("div"); tp.className="b"; tp.innerHTML='<span class="tdots"><i></i><i></i><i></i></span>';
+$("chatLog").appendChild(tp); $("chatLog").scrollTop=9999;
+let j={};
+try{
+let hist=[]; try{ hist=JSON.parse(localStorage.getItem("chat_hist")||"[]").slice(-6); }catch{}
+j=await (await api("/api/chat",{method:"POST",body:JSON.stringify({message:msg,history:hist})})).json(); }catch{}
+await new Promise(r=>setTimeout(r,500+Math.min((j&&j.reply||"").length*8,1500)));
+tp.outerHTML=`<div class="b"><span>${((j&&j.reply)||"...").replace(/</g,"&lt;")}</span></div>`;
+chatSave("b",(j&&j.reply)||"...");
+$("chatLog").scrollTop=9999;
+}
+$("chatIn").addEventListener("keydown",e=>{ if(e.key==="Enter") sendChat(); });
+
+// membros: TODOS + busca com sugestões
+async function loadRoles(){
+try{
+const j=await (await api("/api/roles")).json();
+$("roleSel").innerHTML=`<option value="">TODOS</option>`+(j.roles||[]).map(r=>`<option value="${r.id}">${r.name} (${fmt(r.memberCount)})</option>`).join("");
+memRole=""; memCursor=""; memLoaded=[]; $("memList").innerHTML="<p class='msg'>Digite acima para buscar qualquer pessoa do grupo.</p>";
+}catch{}
+}
+$("roleSel").onchange=e=>{ memRole=e.target.value; memCursor=""; memLoaded=[]; if(memRole) loadMembers(); else $("memList").innerHTML="<p class='msg'>Digite acima para buscar qualquer pessoa do grupo.</p>"; };
+$("qMem").oninput=()=>{ if(memRole) paintMembers(); else paintMembersClickable(); };
+$("moreMem").onclick=()=>loadMembers();
+let sugT=null;
+$("qMemAll").addEventListener("input",e=>{
+clearTimeout(sugT);
+const q=e.target.value.trim();
+if(q.length<2){ $("sugList").style.display="none"; return; }
+sugT=setTimeout(async()=>{
+try{
+const j=await (await api("/api/members/search?q="+encodeURIComponent(q))).json();
+const list=(j.results||[]).slice(0,8);
+$("sugList").innerHTML=list.map((m,i)=>`<div data-i="${i}">@${m.username} • ${m.displayName}</div>`).join("")||"<div>Nada encontrado</div>";
+$("sugList").style.display="block";
+$("sugList").querySelectorAll("div[data-i]").forEach(d=>d.onclick=()=>{ $("sugList").style.display="none"; showProfile(list[parseInt(d.dataset.i,10)].username); });
+$("sugList")._list=list;
+}catch{};
+},400);
+});
+$("qMemAll").addEventListener("keydown",e=>{ if(e.key==="Enter"){ const l=$("sugList")._list||[]; $("sugList").style.display="none"; if(l.length) showProfile(l[0].username); else showProfile(e.target.value.trim()); } });
+async function showProfile(q){
+if(!q) return;
+$("profileBox").innerHTML="<p class='msg'>Pesquisando...</p>";
+let prof=null;
+try{ const r=await api("/api/user/lookup?q="+encodeURIComponent(q)); if(r.ok) prof=await r.json(); }catch{}
+if(!prof||prof.error){ $("profileBox").innerHTML="<p class='msg err'>Pessoa não encontrada.</p>"; return; }
+let cargo="—";
+try{ const s=await (await api("/api/members/search?q="+encodeURIComponent(prof.username))).json(); const f=(s.results||[]).find(x=>String(x.userId)===String(prof.id)); if(f) cargo=f.role; }catch{}
+const nasc=prof.created?new Date(prof.created).toLocaleDateString("pt-BR"):"—";
+$("profileBox").innerHTML=`<div class="profile">
+<div style="display:flex;gap:12px;align-items:center">${prof.avatar?`<img src="${prof.avatar}" alt="" style="width:72px;height:72px;border-radius:50%;object-fit:cover;background:#222">`:""}<div><b style="font-size:18px">${prof.displayName}</b> <span style="color:#888">@${prof.username}</span></div></div>
+<div class="msg">ID <b>${prof.id}</b> • Cargo: <b>${cargo}</b> • Criada em <b>${nasc}</b>${prof.verified?" • ✔ verificada":""}${prof.banned?" • ⚠ banida":""}</div>
+<div class="msg"><b>${prof.friends??"—"}</b> amigos • <b>${prof.followers??"—"}</b> seguidores • <b>${prof.following??"—"}</b> seguindo</div>
+${prof.bio?`<div class="msg">“${prof.bio.slice(0,300)}”</div>`:""}
+<div><a href="${prof.profile}" target="_blank" style="color:#ffa04d">Abrir perfil completo →</a></div>
+</div>`;
+}
+async function loadMembers(){
+if(!memRole) return;
+const j=await (await api(`/api/members?roleId=${memRole}&limit=100&cursor=${encodeURIComponent(memCursor)}`)).json();
+memLoaded=memLoaded.concat(j.data||[]); memCursor=j.nextPageCursor||""; $("moreMem").style.display=memCursor?"":"none"; paintMembers();
+}
+function paintMembers(){
+const q=($("qMem").value||"").toLowerCase();
+const list=memLoaded.filter(m=>(m.username||"").toLowerCase().includes(q)||(m.displayName||"").toLowerCase().includes(q));
+$("memList").innerHTML=list.length?`<table class="datatable"><tr><th>ID</th><th>Usuário</th><th>Nome</th><th style="text-align:right">Perfil</th></tr>${list.map(m=>`<tr><td>${m.userId}</td><td>@${m.username}</td><td>${m.displayName}</td><td style="text-align:right"><a href="https://www.roblox.com/users/${m.userId}/profile" target="_blank">Abrir</a></td></tr>`).join("")}</table><p class="msg">${list.length} de ${memLoaded.length} carregados.</p>`:"<p class='msg'>Nada aqui ainda.</p>";
+}
+
+// (Registro removido desta versão — avisos continuam no Discord)
+
+
+// datas comemorativas com início e fim exatos
+function easter(y){ const a=y%19,b=Math.floor(y/100),c=y%100,d=Math.floor(b/4),e=b%4,f=Math.floor((b+8)/25),g=Math.floor((b-f+1)/3),h=(19*a+b-d-g+15)%30,i=Math.floor(c/4),k=c%4,l=(32+2*e+2*i-h-k)%7,m=Math.floor((a+11*h+22*l)/451),mo=Math.floor((h+l-7*m+114)/31),dd=((h+l-7*m+114)%31)+1; return new Date(y,mo-1,dd); }
+function secondSunday(y,mo){ const d=new Date(y,mo,1); const off=(7-d.getDay())%7; return new Date(y,mo,1+off+7); }
+function applyTheme(){
+const now=new Date(), y=now.getFullYear();
+const E=easter(y);
+const addD=(base,n)=>{ const d=new Date(base.getTime()); d.setDate(d.getDate()+n); return d; };
+const ranges=[
+{ s:new Date(y,9,1), e:new Date(y,9,31,23,59), e2:["🎃","👻","🦇"],greet:"Feliz Halloween! 🎃" },
+{ s:addD(E,-50), e:addD(E,-47), e2:["🎭","🎉","🥁"],greet:"Feliz Carnaval! 🎭" },
+{ s:new Date(y,11,24), e:new Date(y+1,0,6,23,59), e2:["🎄","❄","🎅"],greet:"Feliz Natal! 🎄" },
+{ s:new Date(y,11,31), e:new Date(y+1,0,1,23,59), e2:["🎆","🥂","✨"],greet:"Feliz Ano Novo! 🎆" },
+{ s:addD(E,-3), e:E, e2:["🐰","🥚","🌷"],greet:"Feliz Páscoa! 🐰" },
+{ s:new Date(y,5,1), e:new Date(y,5,30,23,59), e2:["🌽","🔥","🎵"],greet:"Feliz São João! 🌽" },
+{ s:secondSunday(y,4), e:new Date(secondSunday(y,4).getTime()).setHours(23,59), e2:["💐","❤","🤱"],greet:"Feliz Dia das Mães! 💐" },
+{ s:secondSunday(y,7), e:new Date(secondSunday(y,7).getTime()).setHours(23,59), e2:["👔","💙","🍻"],greet:"Feliz Dia dos Pais! 👔" },
+{ s:new Date(y,9,12), e:new Date(y,9,12,23,59), e2:["🧸","🍭","🎈"],greet:"Feliz Dia das Crianças! 🧸" },
+{ s:new Date(y,5,12), e:new Date(y,5,12,23,59), e2:["💘","❤","💑"],greet:"Feliz Dia dos Namorados! 💘" },
+];
+const t=ranges.find(r=>now>=r.s&&now<=r.e);
+if(!t) return;
+window._hgreet=" • "+t.greet;
+const box=$("decor");
+for(let i=0;i<5;i++){ const s=document.createElement("span"); s.textContent=t.e2[i%t.e2.length]; s.style.left=(i*19+Math.random()*5)+"%"; s.style.animationDuration=(11+Math.random()*7)+"s"; s.style.animationDelay=(Math.random()*10)+"s"; box.appendChild(s); }
+}
+// confete ao bater nova meta (1x no dia)
+function checkMeta(sales30){
+const METAS=[50,100,200,300,500,750,1000,1500,2000,3000,5000];
+const hit=[...METAS].reverse().find(m=>sales30>=m);
+if(!hit) return;
+let st={}; try{ st=JSON.parse(localStorage.getItem("confettiMeta")||"{}"); }catch{}
+if((st.m||0)>=hit) return; // cada meta comemora 1 única vez
+localStorage.setItem("confettiMeta",JSON.stringify({m:hit}));
+if(typeof confetti!=="undefined"){ setTimeout(()=>{ confetti({particleCount:160,spread:75,origin:{y:.6}}); setTimeout(()=>confetti({particleCount:90,angle:60,spread:60,origin:{x:0}}),300); setTimeout(()=>confetti({particleCount:90,angle:120,spread:60,origin:{x:1}}),500); },800); }
+}
+async function checkMetaSoon(){
+try{ const a=await (await api("/api/analytics?days=30")).json(); if(a.sales!=null) checkMeta(a.sales); }catch{}
+}
+
+// membros TODOS: carrega a lista inteira aos poucos, com progresso
+let todosStop=false;
+async function loadTodosPreview(){
+todosStop=false;
+try{
+const j=await (await api("/api/roles")).json();
+const base=(j.roles||[]).find(r=>r.isBase)||(j.roles||[]).sort((a,b)=>(b.memberCount||0)-(a.memberCount||0))[0];
+if(!base) return;
+memLoaded=[]; memCursor="";
+let pages=0;
+while(!todosStop){
+const u=await (await api(`/api/members?roleId=${base.id}&limit=100&cursor=${encodeURIComponent(memCursor)}`)).json();
+memLoaded=memLoaded.concat(u.data||[]);
+memCursor=u.nextPageCursor||"";
+pages++;
+$("memList").innerHTML=`<p class="msg">Carregando membros... ${fmt(memLoaded.length)} até agora.</p>`;
+paintMembersClickable();
+if(!memCursor||pages>=120) break;
+await new Promise(r=>setTimeout(r,150));
+}
+$("memList").innerHTML=$("memList").innerHTML+`<p class="msg">Total: ${fmt(memLoaded.length)} na lista. Clique num nome para ver o perfil.</p>`;
+}catch{}
+}
+function paintMembersClickable(){
+const q=($("qMem").value||"").toLowerCase();
+const list=memLoaded.filter(m=>(m.username||"").toLowerCase().includes(q)||(m.displayName||"").toLowerCase().includes(q));
+const shown=list.slice(0,500);
+$("memList").innerHTML=list.length?`<table class="datatable"><tr><th>ID</th><th>Usuário</th><th>Nome</th><th style="text-align:right">Perfil</th></tr>${shown.map(m=>`<tr><td>${m.userId}</td><td><a href="#" onclick="showProfile('${m.username}');return false">@${m.username}</a></td><td><a href="#" onclick="showProfile('${m.username}');return false" style="color:#fff">${m.displayName}</a></td><td style="text-align:right"><a href="https://www.roblox.com/users/${m.userId}/profile" target="_blank">Abrir</a></td></tr>`).join("")}</table><p class="msg">${fmt(shown.length)} de ${fmt(list.length)} (filtrados de ${fmt(memLoaded.length)} carregados). Clique num nome para ver o perfil.</p>`:"<p class='msg'>Digite acima para buscar qualquer pessoa do grupo.</p>";
+}
+
+async function loadAll(){ if(!(await brGate())) return; applyTheme(); checkMetaSoon(); await loadGroup(); await loadAnalytics(); loadTodosPreview(); loadDaily(); loadChatHistory(); }
+if("serviceWorker" in navigator){ window.addEventListener("load",()=>{ try{ navigator.serviceWorker.register("/sw.js"); }catch{} }); }
+setInterval(async()=>{ // vigia rápido: confere venda nova a cada 15s e atualiza na hora
+if(!isLeader()) return;
+try{
+const l=await (await api("/api/latest")).json();
+if(l.firstId&&LAST_TX&&String(l.firstId)!==String(LAST_TX)){ await loadAnalytics(); }
+}catch{}
+},15000);
+loadAll();
+setInterval(async()=>{ // vigia rápido: confere venda nova a cada 15s e atualiza na hora
+try{
+const l=await (await api("/api/latest")).json();
+if(l.firstId&&LAST_TX&&String(l.firstId)!==String(LAST_TX)){ await loadAnalytics(); }
+}catch{}
+},30000);
+setInterval(()=>{ if(isLeader()) loadAnalytics(); },60000);
+</script>
+</body>
+</html>
