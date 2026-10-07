@@ -12,6 +12,46 @@ const COOKIE_RAW = process.env.ROBLOX_COOKIE || "";
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const AI_PROVIDER = (process.env.AI_PROVIDER || "").toLowerCase();
+const WA_PHONE = (process.env.WA_PHONE || "").replace(/\D/g, "");
+const WA_APIKEY = (process.env.WA_APIKEY || "").trim();
+// WhatsApp via CallMeBot (grátis): manda mensagem a cada venda nova
+async function sendWhats(text) {
+  if (!WA_PHONE || !WA_APIKEY) return { ok: false, error: "no-config" };
+  try {
+    const url = `https://api.callmebot.com/whatsapp.php?phone=${WA_PHONE}&text=${encodeURIComponent(text.slice(0, 900))}&apikey=${WA_APIKEY}`;
+    const r = await fetch(url);
+    const t = await r.text();
+    if (!r.ok) { console.log("[whats] erro", r.status); return { ok: false, error: "http-" + r.status }; }
+    return { ok: true };
+  } catch (e) { console.log("[whats] falha", e.message); return { ok: false, error: e.message }; }
+}
+async function waPoll() {
+  if (!WA_PHONE || !WA_APIKEY || !COOKIE_RAW) return;
+  try {
+    const url = `https://economy.roblox.com/v2/groups/${encodeURIComponent(GROUP_ID)}/transactions?transactionType=Sale&limit=10`;
+    const r = await economyFetch(url);
+    const d = await readJson(r);
+    if (!r.ok || !Array.isArray(d.data) || !d.data.length) return;
+    const snap = loadJsonFile(SNAP_FILE, {});
+    const lastSeen = snap.lastSaleId ? String(snap.lastSaleId) : null;
+    const newOnes = [];
+    for (const t of d.data.slice(0, 5)) {
+      if (lastSeen && String(t.id) === lastSeen) break;
+      newOnes.unshift(t);
+    }
+    snap.lastSaleId = String(d.data[0].id);
+    saveJsonFile(SNAP_FILE, snap);
+    if (!lastSeen) return;
+    for (const t of newOnes.slice(-3)) {
+      const a = getAsset(t);
+      const agent = t.agent || {};
+      const when = new Date(t.created).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
+      const s = await sendWhats(`💰 VENDA NOVA\n${a.name} para ${agent.name || "?"} (${getRobux(t)})\n${when}`);
+      console.log(`[whats] venda ${a.name} -> ${s.ok ? "ok" : s.error}`);
+      await new Promise((rr) => setTimeout(rr, 5000));
+    }
+  } catch (e) { console.log("[wa-poll]", e.message); }
+}
 async function askFreeAI(message, ctx) {
   // Pollinations: IA gratuita, sem chave (https://pollinations.ai)
   try {
@@ -954,5 +994,13 @@ app.listen(PORT, () => {
     };
     setTimeout(warm, 8000);
     setInterval(warm, 10 * 60 * 1000);
+  }
+  // avisos de venda no WhatsApp (CallMeBot)
+  if (WA_PHONE && WA_APIKEY && COOKIE_RAW) {
+    console.log("WhatsApp: ok");
+    waPoll();
+    setInterval(waPoll, 60 * 1000);
+  } else {
+    console.log("WhatsApp: desligado (WA_PHONE/WA_APIKEY)");
   }
 });
