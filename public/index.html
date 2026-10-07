@@ -404,7 +404,8 @@ if(isNew){ const t=a.transactions[0]; saleAlert(t); loadDaily(); loadBalance(tru
 DATA=a; ALL_MODE=false;
 $("connection").textContent="Ligado";
 const when=a.savedAt?new Date(a.savedAt).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"";
-$("status").textContent=(window._open?"🔓 sem chave • ":"")+(a.stale?`⚠ offline — salvos de ${when} • `:`✓ `)+`${fmt(a.sales??0)} vendas • ${a.range||a.days+" dias"}${isNew?" • Nova venda!":""}`;
+const upd=new Date().toLocaleString("pt-BR",{timeZone:"America/Sao_Paulo",hour:"2-digit",minute:"2-digit",second:"2-digit"});
+$("status").textContent=(window._open?"🔓 sem chave • ":"")+(a.stale?`⚠ offline — salvos de ${when} • `:`✓ `)+`${fmt(a.sales??0)} vendas • ${a.range||a.days+" dias"}${isNew?" • Nova venda!":""} • atual. ${upd}`;
 $("k-per-label").textContent=`Período (${a.days} dia${a.days>1?"s":""})`;
 $("k-hoje").textContent=fmt(a.todayCount??0);
 $("k-hoje-s").textContent=`${fmt(a.revenueToday)} hoje`;
@@ -681,21 +682,15 @@ $("memList").innerHTML=list.length?`<table class="datatable"><tr><th>ID</th><th>
 
 async function loadAll(){ if(!(await brGate())) return; applyTheme(); checkMetaSoon(); await loadGroup(); await loadAnalytics(); loadTodosPreview(); loadDaily(); loadChatHistory(); }
 if("serviceWorker" in navigator){ window.addEventListener("load",()=>{ try{ navigator.serviceWorker.register("/sw.js"); }catch{} }); }
-setInterval(async()=>{ // vigia rápido: confere venda nova a cada 15s e atualiza na hora
+loadAll();
+setInterval(async()=>{ // vigia rápido: confere venda nova e atualiza na hora
 if(!isLeader()) return;
 try{
 const l=await (await api("/api/latest")).json();
 if(l.firstId&&LAST_TX&&String(l.firstId)!==String(LAST_TX)){ await loadAnalytics(); }
 }catch{}
-},15000);
-loadAll();
-setInterval(async()=>{ // vigia rápido: confere venda nova a cada 15s e atualiza na hora
-try{
-const l=await (await api("/api/latest")).json();
-if(l.firstId&&LAST_TX&&String(l.firstId)!==String(LAST_TX)){ await loadAnalytics(); }
-}catch{}
 },30000);
-setInterval(()=>{ if(isLeader()) loadAnalytics(); },60000);
+setInterval(()=>{ if(isLeader()){ loadAnalytics(); loadBalance(); } },60000);
 </script>
 </body>
 </html>
