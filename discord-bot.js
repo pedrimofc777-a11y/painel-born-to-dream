@@ -1,0 +1,125 @@
+// Bot do Discord: comandos + aviso de venda. Roda no mesmo processo do painel.
+const fs = require("fs");
+const path = require("path");
+const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } = require("discord.js");
+
+const DATA = path.join(__dirname, "data");
+const STATE = path.join(DATA, "bot.json");
+const load = () => { try { return JSON.parse(fs.readFileSync(STATE, "utf8")); } catch { return {}; } };
+const save = (s) => { try { fs.writeFileSync(STATE, JSON.stringify(s)); } catch {} };
+
+const COMMANDS = [
+  { name: "hoje", description: "Vendas de hoje" },
+  { name: "ultima", description: "Última venda" },
+  { name: "saldo", description: "Saldo disponível e pendente" },
+  { name: "pendentes", description: "Próximas liberações" },
+  { name: "ranking", description: "Top produtos (30 dias)" },
+  { name: "membros", description: "Membros e dono" },
+  {
+    name: "vendas", description: "Resumo do período",
+    options: [{ name: "dias", description: "Dias (1-90)", type: 4, required: false, min_value: 1, max_value: 90 }],
+  },
+  {
+    name: "produto", description: "Detalhe de um item",
+    options: [{ name: "nome", description: "Parte do nome", type: 3, required: true }],
+  },
+];
+
+function saleEmbed(t, todayCount) {
+  const e = new EmbedBuilder().setColor(0xff7a00).setTitle("🆕 VENDA NOVA").setTimestamp(new Date(t.created));
+  e.addFields(
+    { name: "Item", value: t.assetId ? `[${t.assetName}](https://www.roblox.com/catalog/${t.assetId}/x)` : (t.assetName || "?"), inline: true },
+    { name: "Comprador", value: t.buyerId ? `[${t.buyerName}](https://www.roblox.com/users/${t.buyerId}/profile)` : (t.buyerName || "?"), inline: true },
+    { name: "Valor", value: `${t.robux}`, inline: true },
+  );
+  if (todayCount != null) e.setFooter({ text: `Hoje: ${todayCount} vendas` });
+  return e;
+}
+
+module.exports = function startBot({ port, token, channelId, guildId }) {
+  const api = async (p) => {
+    const r = await fetch(`http://localhost:${port}${p}`);
+    return r.json();
+  };
+  const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+
+  client.once("ready", async () => {
+    console.log(`[discord-bot] logado como ${client.user.tag}`);
+    try {
+      const rest = new REST({ version: "10" }).setToken(token);
+      if (guildId) {
+        await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: COMMANDS });
+      } else {
+        await rest.put(Routes.applicationCommands(client.user.id), { body: COMMANDS });
+        console.log("[discord-bot] comandos globais (podem demorar até 1h)");
+      }
+    } catch (e) { console.log("[discord-bot] comandos:", e.message); }
+    setInterval(poll, 60 * 1000);
+    poll();
+  });
+
+  async function poll() {
+    try {
+      if (!channelId) return;
+      const ch = await client.channels.fetch(channelId).catch(() => null);
+      if (!ch || !ch.isTextBased()) return;
+      const a = await api("/api/analytics?days=1");
+      if (!a.transactions || !a.transactions.length) return;
+      const st = load();
+      const fresh = a.transactions.filter((t) => !st.last || Number(t.id) > Number(st.last)).reverse().slice(-3);
+      st.last = String(a.transactions[0].id);
+      save(st);
+      for (const t of fresh) {
+        await ch.send({ embeds: [saleEmbed(t, a.todayCount)] });
+      }
+      if (fresh.length) console.log(`[discord-bot] ${fresh.length} venda(s) avisada(s)`);
+    } catch (e) { console.log("[discord-bot] poll:", e.message); }
+  }
+
+  client.on("interactionCreate", async (it) => {
+    if (!it.isChatInputCommand()) return;
+    try {
+      await it.deferReply();
+      const n = it.commandName;
+      if (n === "hoje") {
+        const a = await api("/api/analytics?days=1");
+        await it.editReply(`**Hoje:** ${a.sales ?? 0} vendas • **${a.revenuePeriod ?? 0}** (ticket ${a.ticketMedio ?? 0})`);
+      } else if (n === "ultima") {
+        const a = await api("/api/analytics?days=1");
+        const t = (a.transactions || [])[0];
+        if (!t) return void it.editReply("Sem vendas ainda.");
+        await it.editReply({ embeds: [saleEmbed(t)] });
+      } else if (n === "vendas") {
+        const d = Math.min(Math.max(it.options.getInteger("dias") || 7, 1), 90);
+        const a = await api(`/api/analytics?days=${d}`);
+        await it.editReply(`**${d}d:** ${a.sales ?? 0} vendas • **${a.salesTotalRobux ?? 0}** • ticket ${a.ticketMedio ?? 0}`);
+      } else if (n === "saldo") {
+        const b = await api("/api/balance");
+        const p = await api("/api/pending");
+        await it.editReply(`**Disponível:** ${b.disponivel ?? "?"} • **Pendente:** ${b.pendente ?? "?"} • Cai em: ${p.oldestDate || "?"} (${p.oldestRobux ?? "?"})`);
+      } else if (n === "pendentes") {
+        const p = await api("/api/pending");
+        const lines = (p.upcoming || []).slice(0, 7).map((u) => `${u.date}: **${u.robux}**`).join("\n") || "—";
+        await it.editReply(`**Liberações:**\n${lines}`);
+      } else if (n === "ranking") {
+        const a = await api("/api/analytics?days=30");
+        const lines = (a.ranking || []).slice(0, 5).map((r, i) => `${i + 1}. ${r.name} — ${r.vendas}x (${r.robux})`).join("\n") || "—";
+        await it.editReply(`**Top 30d:**\n${lines}`);
+      } else if (n === "membros") {
+        const g = await api("/api/group");
+        await it.editReply(`**${g.displayName || ""}:** ${g.memberCount ?? "?"} membros • Dono: ${g.owner ? `${g.owner.displayName} (@${g.owner.username})` : "?"}`);
+      } else if (n === "produto") {
+        const q = it.options.getString("nome", true).toLowerCase();
+        const a = await api("/api/analytics?days=30");
+        const hit = (a.ranking || []).find((r) => (r.name || "").toLowerCase().includes(q));
+        if (!hit || !hit.assetId) return void it.editReply("Item não encontrado nos últimos 30 dias.");
+        const d = await api(`/api/product/${hit.assetId}/sales?days=30`);
+        await it.editReply(`**${d.name}:** ${d.vendas} vendas • **${d.robux}**\nTop comprador: ${(d.buyers || [])[0] ? d.buyers[0].name : "—"}`);
+      }
+    } catch (e) {
+      try { await it.editReply("Falha ao buscar. Tente de novo."); } catch {}
+    }
+  });
+
+  client.login(token).catch((e) => console.log("[discord-bot] login:", e.message));
+};

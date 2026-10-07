@@ -89,16 +89,26 @@
 .card strong{font-size:22px}
 .cards{grid-template-columns:repeat(2,1fr);gap:8px}
 .period button{font-size:11px;padding:7px 9px}
-.period input{flex:1;min-width:120px}
+.period input{flex:none;min-width:140px;min-height:40px}
 .panel{padding:12px}
 .panel-head{flex-direction:column;gap:8px;align-items:flex-start}
 #txwrap,#tx-mini,.products{overflow-x:auto}
 .datatable{font-size:12px;min-width:480px}
 .datatable td,.datatable th{padding:7px 6px;white-space:nowrap}
-#modal .box{padding:14px}
+#modal{padding:0}#modal .box{width:100vw;max-height:100vh;height:100vh;border-radius:0;padding:14px}
+.panel canvas{height:230px!important}
+.chart-tools button{min-height:36px}
+.top-btns .iconbtn{min-height:42px}
 .sug{min-width:100%}
 .grid,.lower{grid-template-columns:1fr!important}
 .topbar h1{font-size:19px}
+}
+@media(max-width:720px){
+.period{flex-wrap:nowrap;overflow-x:auto}
+.period button{flex:none}
+.nav span{display:none}
+.nav{font-size:14px}
+.main{padding-bottom:48px}
 }
 </style>
 </head>

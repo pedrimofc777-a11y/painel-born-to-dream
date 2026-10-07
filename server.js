@@ -999,6 +999,19 @@ app.listen(PORT, () => {
     setTimeout(warm, 8000);
     setInterval(warm, 10 * 60 * 1000);
   }
+  // bot do Discord (comandos + avisos de venda)
+  if (process.env.DISCORD_TOKEN && process.env.DISCORD_CHANNEL_ID) {
+    try {
+      require("./discord-bot")({
+        port: PORT,
+        token: process.env.DISCORD_TOKEN,
+        channelId: process.env.DISCORD_CHANNEL_ID,
+        guildId: process.env.DISCORD_GUILD_ID || "",
+      });
+    } catch (e) { console.log("[discord-bot]", e.message); }
+  } else {
+    console.log("Bot Discord: desligado (DISCORD_TOKEN/DISCORD_CHANNEL_ID)");
+  }
   // avisos de venda no WhatsApp (CallMeBot)
   if (WA_PHONE.length && WA_APIKEY && COOKIE_RAW) {
     console.log(`WhatsApp: ok (${WA_PHONE.length} número(s))`);
