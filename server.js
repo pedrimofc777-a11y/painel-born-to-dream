@@ -557,9 +557,10 @@ app.get("/api/analytics", async (req, res) => {
     const untilDate = new Date(dayKeys[0] + "T00:00:00");
     const got = await cached("salesR:" + dayKeys[0], 45000, () => fetchSalesPages(pages, untilDate));
     if (got.error) {
+      console.log("[tx] erro", got.error.status, JSON.stringify(got.error.data).slice(0, 200));
       const saved = loadDiskCache()[akey];
       if (saved) return res.json({ ...saved.data, stale: true });
-      return sendA({ available: true, partial: true, days: dayKeys.length, official, sales: null, ticketMedio: null, byDay: [], byHour: [], transactions: [] }, 15000);
+      return sendA({ available: true, partial: true, days: dayKeys.length, official, sales: null, ticketMedio: null, byDay: [], byHour: [], transactions: [], txError: got.error.status || "?" }, 15000);
     }
     const txs = got.txs;
     const set = new Set(dayKeys);
