@@ -705,6 +705,7 @@ if(l.firstId&&LAST_TX&&String(l.firstId)!==String(LAST_TX)){ await loadAnalytics
 }catch{}
 },30000);
 setInterval(()=>{ if(isLeader()){ loadAnalytics(); loadBalance(); } },60000);
+setInterval(()=>{ if(isLeader()) loadBalance(); },30000);
 </script>
 </body>
 </html>

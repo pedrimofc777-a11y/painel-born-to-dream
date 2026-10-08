@@ -15,6 +15,11 @@ const COMMANDS = [
   { name: "pendentes", description: "Próximas liberações" },
   { name: "ranking", description: "Top produtos (30 dias)" },
   { name: "membros", description: "Membros e dono" },
+  { name: "previsao", description: "Próximas liberações" },
+  { name: "ticket", description: "Ticket médio (30 dias)" },
+  { name: "compradores", description: "Top compradores (30 dias)" },
+  { name: "resumo", description: "Resumo geral do grupo" },
+  { name: "ajuda", description: "Lista de comandos" },
   {
     name: "vendas", description: "Resumo do período",
     options: [{ name: "dias", description: "Dias (1-90)", type: 4, required: false, min_value: 1, max_value: 90 }],
@@ -109,6 +114,28 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       } else if (n === "membros") {
         const g = await api("/api/group");
         await it.editReply(`**${g.displayName || ""}:** ${g.memberCount ?? "?"} membros • Dono: ${g.owner ? `${g.owner.displayName} (@${g.owner.username})` : "?"}`);
+      } else if (n === "previsao") {
+        const p = await api("/api/pending");
+        const tot = (p.upcoming || []).reduce((s, u) => s + u.robux, 0);
+        await it.editReply(`**Previsão:** ${tot} liberando até ${p.lastDate || p.oldestDate || "?"} (±1 mês) • próxima: ${p.oldestDate || "?"} (${p.oldestRobux ?? "?"})`);
+      } else if (n === "ticket") {
+        const a = await api("/api/analytics?days=30");
+        await it.editReply(`**Ticket médio (30d):** ${a.ticketMedio ?? "?"} • ${a.sales ?? "?"} vendas`);
+      } else if (n === "compradores") {
+        const a = await api("/api/analytics?days=30");
+        const by = {};
+        for (const t of (a.transactions || [])) {
+          const nm = t.buyerName || "?";
+          by[nm] = by[nm] || { name: nm, id: t.buyerId, vendas: 0, robux: 0 };
+          by[nm].vendas++; by[nm].robux += t.robux || 0;
+        }
+        const lines = Object.values(by).sort((x, y) => y.robux - x.robux).slice(0, 5).map((b, i) => `${i + 1}. ${b.name} — ${b.vendas}x (${b.robux})`).join("\n") || "—";
+        await it.editReply(`**Top compradores:**\n${lines}`);
+      } else if (n === "resumo") {
+        const [a, g, b] = await Promise.all([api("/api/analytics?days=7"), api("/api/group"), api("/api/balance")]);
+        await it.editReply(`**${g.displayName || ""}** • ${g.memberCount ?? "?"} membros\n**7d:** ${a.sales ?? "?"} vendas • **${a.salesTotalRobux ?? "?"}**\n**Saldo:** ${b.disponivel ?? "?"} • **Pendente:** ${b.pendente ?? "?"}`);
+      } else if (n === "ajuda") {
+        await it.editReply("**Comandos:** /hoje /ultima /vendas /saldo /pendentes /previsao /ticket /compradores /ranking /membros /produto /resumo /ajuda");
       } else if (n === "produto") {
         const q = it.options.getString("nome", true).toLowerCase();
         const a = await api("/api/analytics?days=30");
