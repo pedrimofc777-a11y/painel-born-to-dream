@@ -13,24 +13,27 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const AI_PROVIDER = (process.env.AI_PROVIDER || "").toLowerCase();
 const WA_PHONE = (process.env.WA_PHONE || "").split(",").map((s) => s.replace(/\D/g, "")).filter(Boolean);
-const WA_APIKEY = (process.env.WA_APIKEY || "").trim();
-// WhatsApp via CallMeBot (grátis): manda mensagem a cada venda nova, para todos os números
+const WA_APIKEY = (process.env.WA_APIKEY || "").split(",").map((s) => s.trim()).filter(Boolean);
+// Cada número precisa da PRÓPRIA chave (ative cada um no bot, na mesma ordem).
+// Ex: WA_PHONE=5511A,5522B + WA_APIKEY=chaveA,chaveB
 async function sendWhats(text) {
-  if (!WA_PHONE.length || !WA_APIKEY) return { ok: false, error: "no-config" };
+  if (!WA_PHONE.length || !WA_APIKEY.length) return { ok: false, error: "no-config" };
   let ok = 0, err = null;
-  for (const phone of WA_PHONE) {
+  for (let i = 0; i < WA_PHONE.length; i++) {
+    const apikey = WA_APIKEY[i] || WA_APIKEY[0];
     try {
-      const url = `https://api.callmebot.com/whatsapp.php?phone=${phone}&text=${encodeURIComponent(text.slice(0, 900))}&apikey=${WA_APIKEY}`;
+      const url = `https://api.callmebot.com/whatsapp.php?phone=${WA_PHONE[i]}&text=${encodeURIComponent(text.slice(0, 900))}&apikey=${apikey}`;
       const r = await fetch(url);
-      if (r.ok) ok++;
-      else { err = "http-" + r.status; console.log("[whats] erro", r.status, phone); }
+      const body = await r.text().catch(() => "");
+      if (r.ok && !/error|not authorized|not allowed/i.test(body.slice(0, 200))) { ok++; }
+      else { err = body.slice(0, 120) || ("http-" + r.status); console.log("[whats] erro", WA_PHONE[i], err); }
     } catch (e) { err = e.message; console.log("[whats] falha", e.message); }
     await new Promise((rr) => setTimeout(rr, 6000));
   }
   return ok ? { ok: true } : { ok: false, error: err };
 }
 async function waPoll() {
-  if (!WA_PHONE.length || !WA_APIKEY || !COOKIE_RAW) return;
+  if (!WA_PHONE.length || !WA_APIKEY.length || !COOKIE_RAW) return;
   try {
     const url = `https://economy.roblox.com/v2/groups/${encodeURIComponent(GROUP_ID)}/transactions?transactionType=Sale&limit=10`;
     const r = await economyFetch(url);
@@ -1013,7 +1016,7 @@ app.listen(PORT, () => {
     console.log("Bot Discord: desligado (DISCORD_TOKEN/DISCORD_CHANNEL_ID)");
   }
   // avisos de venda no WhatsApp (CallMeBot)
-  if (WA_PHONE.length && WA_APIKEY && COOKIE_RAW) {
+  if (WA_PHONE.length && WA_APIKEY.length && COOKIE_RAW) {
     console.log(`WhatsApp: ok (${WA_PHONE.length} número(s))`);
     waPoll();
     setInterval(waPoll, 60 * 1000);
