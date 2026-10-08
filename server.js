@@ -183,6 +183,20 @@ async function readJson(res) {
   const text = await res.text();
   try { return JSON.parse(text); } catch { return { raw: text }; }
 }
+async function pubGet(url, tries = 3) {
+  let last = null;
+  for (let i = 0; i < tries; i++) {
+    try {
+      const r = await fetch(url);
+      const d = await readJson(r);
+      if (r.ok) return { ok: true, data: d };
+      last = { status: r.status, data: d };
+      if (r.status !== 429 && r.status < 500) break;
+    } catch (e) { last = { error: e.message }; }
+    await new Promise((rr) => setTimeout(rr, 1500 * (i + 1)));
+  }
+  return { ok: false, ...(last || { error: "falha de rede" }) };
+}
 // cache curto: evita martelar o Roblox (que limita e devolve vazio)
 const cache = new Map();
 async function cached(key, ttlMs, fn) {
@@ -226,9 +240,13 @@ app.get("/api/group", async (_req, res) => {
     } catch {}
   }
   try {
-    const r = await fetch(`https://groups.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}`);
-    const data = await readJson(r);
-    if (!r.ok) return res.status(r.status).json({ error: "Grupo não encontrado." });
+    const g = await pubGet(`https://groups.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}`);
+    if (!g.ok) {
+      const saved = loadDiskCache().group;
+      if (saved) return res.json({ ...saved.data, stale: true });
+      return res.status(g.status || 500).json({ error: "Grupo não encontrado." });
+    }
+    const data = g.data;
     const out = {
       id: String(data.id), displayName: data.name, name: data.name,
       memberCount: data.memberCount, description: data.description,
@@ -246,10 +264,9 @@ app.get("/api/group", async (_req, res) => {
 app.get("/api/roles", async (_req, res) => {
   try {
     const data = await cached("roles", 600000, async () => {
-      const r = await fetch(`https://groups.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}/roles`);
-      const d = await readJson(r);
-      if (!r.ok) return { error: true };
-      return d;
+      const g = await pubGet(`https://groups.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}/roles`);
+      if (!g.ok) return { error: true };
+      return g.data;
     });
     if (data.error) return res.status(503).json({ error: "Falha ao listar cargos." });
     return res.json(data);
