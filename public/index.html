@@ -219,7 +219,7 @@ const fmt1=n=>Number(n||0).toLocaleString("pt-BR",{maximumFractionDigits:2});
 const $=id=>document.getElementById(id);
 async function api(p,o={}){ const h={}; if(o.body) h["Content-Type"]="application/json"; const r=await fetch(p,{...o,headers:{...h,...(o.headers||{})}}); return r; }
 
-document.querySelectorAll("#nav .nav").forEach(b=>b.onclick=()=>{ document.querySelectorAll("#nav .nav").forEach(x=>x.classList.remove("active")); b.classList.add("active"); document.querySelectorAll(".view").forEach(v=>v.classList.remove("active")); $("view-"+b.dataset.tab).classList.add("active"); window.scrollTo(0,0); const m=document.querySelector(".main"); if(m) m.scrollTo(0,0); requestAnimationFrame(()=>renderAllCharts()); });
+document.querySelectorAll("#nav .nav").forEach(b=>b.onclick=()=>{ document.querySelectorAll("#nav .nav").forEach(x=>x.classList.remove("active")); b.classList.add("active"); document.querySelectorAll(".view").forEach(v=>v.classList.remove("active")); $("view-"+b.dataset.tab).classList.add("active"); window.scrollTo(0,0); const m=document.querySelector(".main"); if(m) m.scrollTo(0,0); loadAnalytics(); });
 function goTab(tab){
 const btn=document.querySelector(`#nav .nav[data-tab="${tab}"]`);
 if(btn) btn.click(); else { document.querySelectorAll(".view").forEach(v=>v.classList.remove("active")); $("view-"+tab).classList.add("active"); }

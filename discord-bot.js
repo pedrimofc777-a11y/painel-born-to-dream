@@ -26,18 +26,29 @@ const COMMANDS = [
   },
   {
     name: "produto", description: "Detalhe de um item",
-    options: [{ name: "nome", description: "Parte do nome", type: 3, required: true }],
+    options: [{ name: "nome", description: "Digite para buscar", type: 3, required: true, autocomplete: true }],
   },
 ];
 
-function saleEmbed(t, todayCount) {
-  const e = new EmbedBuilder().setColor(0xff7a00).setTitle("🆕 VENDA NOVA").setTimestamp(new Date(t.created));
+async function thumb(assetId) {
+  try {
+    if (!assetId) return null;
+    const r = await fetch(`https://thumbnails.roblox.com/v1/assets?assetIds=${assetId}&size=150x150&format=Png`);
+    const d = await r.json();
+    return d.data && d.data[0] ? d.data[0].imageUrl : null;
+  } catch { return null; }
+}
+
+function saleEmbed(t, todayCount, img) {
+  const e = new EmbedBuilder().setColor(0xff7a00).setTitle("🆕 VENDA NOVA").setTimestamp(new Date(t.created))
+    .setFooter({ text: "Born to Dream • Roblox Analytics" });
   e.addFields(
-    { name: "Item", value: t.assetId ? `[${t.assetName}](https://www.roblox.com/catalog/${t.assetId}/x)` : (t.assetName || "?"), inline: true },
-    { name: "Comprador", value: t.buyerId ? `[${t.buyerName}](https://www.roblox.com/users/${t.buyerId}/profile)` : (t.buyerName || "?"), inline: true },
-    { name: "Valor", value: `${t.robux}`, inline: true },
+    { name: "📦 Item", value: t.assetId ? `[${t.assetName}](https://www.roblox.com/catalog/${t.assetId}/x)` : (t.assetName || "?"), inline: true },
+    { name: "🙋 Comprador", value: t.buyerId ? `[${t.buyerName}](https://www.roblox.com/users/${t.buyerId}/profile)` : (t.buyerName || "?"), inline: true },
+    { name: "💰 Valor", value: `${t.robux}`, inline: true },
   );
-  if (todayCount != null) e.setFooter({ text: `Hoje: ${todayCount} vendas` });
+  if (todayCount != null) e.addFields({ name: "📊 Hoje", value: `${todayCount} vendas`, inline: true });
+  if (img) e.setThumbnail(img);
   return e;
 }
 
@@ -76,13 +87,24 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       st.last = String(a.transactions[0].id);
       save(st);
       for (const t of fresh) {
-        await ch.send({ embeds: [saleEmbed(t, a.todayCount)] });
+        await ch.send({ embeds: [saleEmbed(t, a.todayCount, await thumb(t.assetId))] });
       }
       if (fresh.length) console.log(`[discord-bot] ${fresh.length} venda(s) avisada(s)`);
     } catch (e) { console.log("[discord-bot] poll:", e.message); }
   }
 
   client.on("interactionCreate", async (it) => {
+    if (it.isAutocomplete()) {
+      try {
+        if (it.commandName === "produto") {
+          const q = (it.options.getFocused() || "").toLowerCase();
+          const a = await api("/api/analytics?days=30");
+          const list = (a.ranking || []).filter((r) => (r.name || "").toLowerCase().includes(q)).slice(0, 25);
+          await it.respond(list.map((r) => ({ name: String(r.name).slice(0, 100), value: String(r.assetId || r.name).slice(0, 100) })));
+        } else { await it.respond([]); }
+      } catch { try { await it.respond([]); } catch {} }
+      return;
+    }
     if (!it.isChatInputCommand()) return;
     try {
       await it.deferReply();
@@ -94,7 +116,7 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
         const a = await api("/api/analytics?days=1");
         const t = (a.transactions || [])[0];
         if (!t) return void it.editReply("Sem vendas ainda.");
-        await it.editReply({ embeds: [saleEmbed(t)] });
+        await it.editReply({ embeds: [saleEmbed(t, null, await thumb(t.assetId))] });
       } else if (n === "vendas") {
         const d = Math.min(Math.max(it.options.getInteger("dias") || 7, 1), 90);
         const a = await api(`/api/analytics?days=${d}`);
@@ -137,12 +159,22 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       } else if (n === "ajuda") {
         await it.editReply("**Comandos:** /hoje /ultima /vendas /saldo /pendentes /previsao /ticket /compradores /ranking /membros /produto /resumo /ajuda");
       } else if (n === "produto") {
-        const q = it.options.getString("nome", true).toLowerCase();
+        const raw = it.options.getString("nome", true);
         const a = await api("/api/analytics?days=30");
-        const hit = (a.ranking || []).find((r) => (r.name || "").toLowerCase().includes(q));
+        let hit = (a.ranking || []).find((r) => String(r.assetId) === raw);
+        if (!hit) hit = (a.ranking || []).find((r) => (r.name || "").toLowerCase().includes(raw.toLowerCase()));
         if (!hit || !hit.assetId) return void it.editReply("Item não encontrado nos últimos 30 dias.");
         const d = await api(`/api/product/${hit.assetId}/sales?days=30`);
-        await it.editReply(`**${d.name}:** ${d.vendas} vendas • **${d.robux}**\nTop comprador: ${(d.buyers || [])[0] ? d.buyers[0].name : "—"}`);
+        const img = await thumb(hit.assetId);
+        const em = new EmbedBuilder().setColor(0xff7a00).setTitle(`📦 ${d.name}`)
+          .setFooter({ text: "Born to Dream • Roblox Analytics" })
+          .addFields(
+            { name: "Vendas", value: `${d.vendas}`, inline: true },
+            { name: "Total", value: `${d.robux}`, inline: true },
+            { name: "Top comprador", value: (d.buyers || [])[0] ? d.buyers[0].name : "—", inline: true },
+          );
+        if (img) em.setThumbnail(img);
+        await it.editReply({ embeds: [em] });
       }
     } catch (e) {
       try { await it.editReply("Falha ao buscar. Tente de novo."); } catch {}
