@@ -87,7 +87,7 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       st.last = String(a.transactions[0].id);
       save(st);
       for (const t of fresh) {
-        await ch.send({ embeds: [saleEmbed(t, a.todayCount, await thumb(t.assetId))] });
+        await ch.send({ content: "||@everyone||", embeds: [saleEmbed(t, a.todayCount, await thumb(t.assetId))] });
       }
       if (fresh.length) console.log(`[discord-bot] ${fresh.length} venda(s) avisada(s)`);
     } catch (e) { console.log("[discord-bot] poll:", e.message); }

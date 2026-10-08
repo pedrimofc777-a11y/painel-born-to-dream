@@ -169,6 +169,12 @@ async function economyFetch(url, opts = {}) {
     return fetch(url, { ...opts, headers });
   };
   let res = await doFetch(csrfCache);
+  if (res.status === 429) {
+    const wait = Math.min((parseFloat(res.headers.get("retry-after") || "5") || 5) * 1000, 30000);
+    console.log("[economy] 429, aguardando", wait, "ms:", url.slice(0, 90));
+    await new Promise((r) => setTimeout(r, wait));
+    res = await doFetch(csrfCache);
+  }
   if (res.status === 403) {
     const newToken = res.headers.get("x-csrf-token");
     if (newToken) {
@@ -357,7 +363,7 @@ app.get("/api/events", (_req, res) => {
 // Saldo do grupo: disponível + pendente (sessão do servidor)
 app.get("/api/balance", async (_req, res) => {
   try {
-    const out = await cached("balance", 120000, async () => {
+    const out = await cached("balance", 300000, async () => {
       const r = await economyFetch(`https://economy.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}/currency`);
       const cur = await readJson(r);
       if (!r.ok) return { error: true };
@@ -485,7 +491,7 @@ async function fetchSalesPages(maxPages = 10, untilDate = null) {
     let r = await economyFetch(url.toString());
     let d = await readJson(r);
     if (!r.ok && [429, 500, 502, 503].includes(r.status)) {
-      await new Promise((rr) => setTimeout(rr, 1500)); // 1 tentativa extra
+      await new Promise((rr) => setTimeout(rr, 4000)); // 1 tentativa extra
       r = await economyFetch(url.toString());
       d = await readJson(r);
     }
@@ -530,7 +536,7 @@ app.get("/api/analytics", async (req, res) => {
     label = `${dayKeys.length} dias`;
   }
   const akey = "analytics:" + (req.query.start && req.query.end ? req.query.start + "_" + req.query.end : "d" + dayKeys.length);
-  const attl = dayKeys.length <= 7 ? 45000 : dayKeys.length <= 30 ? 120000 : 300000;
+  const attl = dayKeys.length <= 7 ? 60000 : dayKeys.length <= 30 ? 180000 : 300000;
   const hitA = cache.get(akey);
   if (hitA && Date.now() - hitA.at < attl) return res.json({ ...hitA.data, cached: true });
   const sendA = (obj, ttl = null, diskKey = null) => {
@@ -541,7 +547,7 @@ app.get("/api/analytics", async (req, res) => {
     return res.json(obj);
   };
   try {
-    const official = await cached("official", 60000, async () => {
+    const official = await cached("official", 180000, async () => {
       const [dayR, weekR, monthR] = await Promise.all([
         economyFetch(`https://economy.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}/revenue/summary/Day`),
         economyFetch(`https://economy.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}/revenue/summary/Week`),
@@ -659,7 +665,7 @@ app.get("/api/game-passes", async (req, res) => {
 // Leitura rápida (5 últimas vendas) para o site detetar venda nova sem recarregar tudo
 app.get("/api/latest", async (_req, res) => {
   try {
-    const out = await cached("latest", 25000, async () => {
+    const out = await cached("latest", 45000, async () => {
       const url = `https://economy.roblox.com/v2/groups/${encodeURIComponent(GROUP_ID)}/transactions?transactionType=Sale&limit=10`;
       const r = await economyFetch(url);
       const d = await readJson(r);
@@ -682,7 +688,7 @@ app.get("/api/pending", async (req, res) => {
   try {
     const got = req.query.fresh
       ? await fetchSalesPages(5)
-      : await cached("sales:10", 120000, () => fetchSalesPages(10));
+      : await cached("sales:10", 300000, () => fetchSalesPages(10));
     if (got.error) {
       const saved = loadDiskCache().pending;
       if (saved) return res.json({ ...saved.data, stale: true });
