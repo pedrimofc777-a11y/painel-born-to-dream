@@ -151,7 +151,14 @@ function buildCookieHeader() {
 }
 
 let csrfCache = "";
-async function economyFetch(url, opts = {}) {
+// fila única: 1 chamada autenticada por vez, com respiro (IP compartilhado sofre 429)
+let ecoChain = Promise.resolve();
+function economyFetch(url, opts = {}) {
+  const p = ecoChain.then(() => economyFetchInner(url, opts));
+  ecoChain = p.catch(() => {}).then(() => new Promise((r) => setTimeout(r, 2500)));
+  return p;
+}
+async function economyFetchInner(url, opts = {}) {
   const cookie = buildCookieHeader();
   if (!cookie) {
     const e = new Error("Conexão com o Roblox indisponível no servidor.");
@@ -1023,8 +1030,15 @@ app.listen(PORT, () => {
         if (!got.error) cache.set(key, { at: Date.now(), data: got });
       } catch {}
     };
-    setTimeout(warm, 8000);
+    setTimeout(warm, 30000);
     setInterval(warm, 10 * 60 * 1000);
+    // aquece a lista curta (pendente/produto) logo no boot
+    setTimeout(async () => {
+      try {
+        const got = await fetchSalesPages(10);
+        if (!got.error) cache.set("sales:10", { at: Date.now(), data: got });
+      } catch {}
+    }, 90000);
   }
   // bot do Discord (comandos + avisos de venda)
   if (process.env.DISCORD_TOKEN && process.env.DISCORD_CHANNEL_ID) {
@@ -1042,8 +1056,8 @@ app.listen(PORT, () => {
   // avisos de venda no WhatsApp (CallMeBot)
   if (WA_PHONE.length && WA_APIKEY.length && COOKIE_RAW) {
     console.log(`WhatsApp: ok (${WA_PHONE.length} número(s))`);
-    waPoll();
-    setInterval(waPoll, 60 * 1000);
+    setTimeout(waPoll, 120000);
+    setInterval(waPoll, 120 * 1000);
   } else {
     console.log("WhatsApp: desligado (WA_PHONE/WA_APIKEY)");
   }

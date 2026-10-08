@@ -70,8 +70,8 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
         console.log("[discord-bot] comandos globais (podem demorar até 1h)");
       }
     } catch (e) { console.log("[discord-bot] comandos:", e.message); }
-    setInterval(poll, 60 * 1000);
-    poll();
+    setTimeout(poll, 150000);
+    setInterval(poll, 120 * 1000);
   });
 
   async function poll() {
