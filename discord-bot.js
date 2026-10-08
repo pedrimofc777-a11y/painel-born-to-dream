@@ -163,8 +163,10 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
         const a = await api("/api/analytics?days=30");
         let hit = (a.ranking || []).find((r) => String(r.assetId) === raw);
         if (!hit) hit = (a.ranking || []).find((r) => (r.name || "").toLowerCase().includes(raw.toLowerCase()));
-        if (!hit || !hit.assetId) return void it.editReply("Item não encontrado nos últimos 30 dias.");
-        const d = await api(`/api/product/${hit.assetId}/sales?days=30`);
+        if (!hit || !hit.assetId) return void it.editReply("Item não encontrado nos últimos 30 dias. Tente o nome exato.");
+        let d;
+        try { d = await api(`/api/product/${hit.assetId}/sales?days=30`); } catch { d = null; }
+        if (!d || d.error) return void it.editReply("Roblox limitou a consulta agora. Tente de novo em 1 minuto.");
         const img = await thumb(hit.assetId);
         const em = new EmbedBuilder().setColor(0xff7a00).setTitle(`📦 ${d.name}`)
           .setFooter({ text: "Born to Dream • Roblox Analytics" })
