@@ -225,10 +225,12 @@ const btn=document.querySelector(`#nav .nav[data-tab="${tab}"]`);
 if(btn) btn.click(); else { document.querySelectorAll(".view").forEach(v=>v.classList.remove("active")); $("view-"+tab).classList.add("active"); }
 }
 function setRange(days, date){
+if(window._loading) return;
 if(date){ CUSTOM={start:date,end:date}; } else { DAYS=days; CUSTOM=null; }
 document.querySelectorAll("[data-pdays]").forEach(x=>x.classList.toggle("active",!date&&parseInt(x.dataset.pdays,10)===DAYS));
 document.querySelectorAll("[data-pdate]").forEach(x=>{ if(!date) x.value=""; });
-ALL_MODE=false; loadAnalytics();
+document.querySelectorAll("[data-pdays],[data-pgo]").forEach(x=>{ x.disabled=true; x.style.opacity=".5"; });
+ALL_MODE=false; loadAnalytics().finally(()=>document.querySelectorAll("[data-pdays],[data-pgo]").forEach(x=>{ x.disabled=false; x.style.opacity=""; }));
 }
 document.querySelectorAll("[data-pdays]").forEach(b=>b.onclick=()=>setRange(parseInt(b.dataset.pdays,10),null));
 document.querySelectorAll("[data-pgo]").forEach(b=>b.onclick=()=>{ const inp=b.parentElement.querySelector("[data-pdate]"); if(inp&&inp.value) setRange(null,inp.value); });
@@ -403,11 +405,12 @@ $("k-tom-s").textContent="cai em "+(p.oldestDate||"—");
 }
 
 async function loadAnalytics(){
+window._loading=true;
 let url="/api/analytics?"+(CUSTOM?`start=${CUSTOM.start}&end=${CUSTOM.end}`:`days=${DAYS}`);
 $("status").textContent="↻ Buscando vendas...";
 let r,a;
-try{ r=await api(url); a=await r.json(); }catch{ $("status").textContent="Falha de rede."; return; }
-if(!r.ok||a.available===false){ $("status").textContent="⚠ Dados indisponíveis no momento."; $("connection").textContent="Instável"; return; }
+try{ r=await api(url); a=await r.json(); }catch{ $("status").textContent="Falha de rede."; window._loading=false; return; }
+if(!r.ok||a.available===false){ $("status").textContent="⚠ Dados indisponíveis no momento."; $("connection").textContent="Instável"; window._loading=false; return; }
 if(a.partial||a.sales==null||a.stale){ $("status").textContent=a.txError?`⚠ Roblox recusou (erro ${a.txError}) — vendo o terminal`:"↻ Sincronizando com o Roblox, tentando de novo em instantes..."; clearTimeout(window._retryT); window._retryT=setTimeout(()=>{ if(isLeader()) loadAnalytics(); },15000); }
 const prevFirst=LAST_TX;
 const isNew=prevFirst&&a.transactions.length&&a.transactions[0].id!==prevFirst;
@@ -431,7 +434,7 @@ $("k-ticket").textContent=fmt1(a.ticketMedio);
 $("sub-dia").textContent=a.range||`${a.days} dias`;
 $("rec-range").textContent=a.range||`${a.days} dias`;
 $("sub-txmini").textContent="5 mais recentes";
-renderAllCharts(); renderTx($("qTx").value||""); renderRanking(); buildAssistant(a);
+renderAllCharts(); renderTx($("qTx").value||""); renderRanking(); buildAssistant(a); window._loading=false;
 const tot=(a.byHour||[]).reduce((s,h)=>s+h.robux,0);
 $("bestHourLine").textContent=!tot?"Sem vendas hoje ainda.":"Melhor horário hoje: "+[...a.byHour].sort((x,y)=>y.robux-x.robux)[0].label+" com "+fmt([...a.byHour].sort((x,y)=>y.robux-x.robux)[0].robux)+".";
 $("receita-detail").innerHTML=`<p class="msg"><b style="color:#fff;font-size:18px">Hoje: ${fmt(a.revenueToday)}</b> em ${fmt(a.todayCount??0)} vendas<br><b style="color:#fff;font-size:18px">Período: ${fmt(a.revenuePeriod)}</b> em ${fmt(a.sales)} vendas<br>Robux médio por venda: <b style="color:#fff">${fmt1(a.ticketMedio)}</b></p>`;

@@ -71,7 +71,7 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       }
     } catch (e) { console.log("[discord-bot] comandos:", e.message); }
     setTimeout(poll, 150000);
-    setInterval(poll, 120 * 1000);
+    setInterval(poll, 180 * 1000);
   });
 
   async function poll() {

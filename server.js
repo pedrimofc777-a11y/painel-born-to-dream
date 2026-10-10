@@ -155,7 +155,7 @@ let csrfCache = "";
 let ecoChain = Promise.resolve();
 function economyFetch(url, opts = {}) {
   const p = ecoChain.then(() => economyFetchInner(url, opts));
-  ecoChain = p.catch(() => {}).then(() => new Promise((r) => setTimeout(r, 2500)));
+  ecoChain = p.catch(() => {}).then(() => new Promise((r) => setTimeout(r, 1200)));
   return p;
 }
 async function economyFetchInner(url, opts = {}) {
@@ -1056,8 +1056,8 @@ app.listen(PORT, () => {
   // avisos de venda no WhatsApp (CallMeBot)
   if (WA_PHONE.length && WA_APIKEY.length && COOKIE_RAW) {
     console.log(`WhatsApp: ok (${WA_PHONE.length} número(s))`);
-    setTimeout(waPoll, 120000);
-    setInterval(waPoll, 120 * 1000);
+    setTimeout(waPoll, 150000);
+    setInterval(waPoll, 180 * 1000);
   } else {
     console.log("WhatsApp: desligado (WA_PHONE/WA_APIKEY)");
   }
