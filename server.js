@@ -596,7 +596,7 @@ app.get("/api/analytics", async (req, res) => {
       const a = getAsset(t);
       return { id: t.id, created: t.created, robux: getRobux(t), assetName: a.name, assetId: a.id, buyerName: t.agent?.name || null, buyerId: t.agent?.id || null, buyerType: t.agent?.type || null };
     });
-    const salesList = inPeriod.slice(0, 1000).map((t) => {
+    const salesList = inPeriod.map((t) => {
       const a = getAsset(t);
       return { id: t.id, created: t.created, robux: getRobux(t), assetName: a.name, assetId: a.id, buyerName: t.agent?.name || null, buyerId: t.agent?.id || null, buyerType: t.agent?.type || null };
     });
@@ -694,8 +694,8 @@ app.get("/api/latest", async (_req, res) => {
 app.get("/api/pending", async (req, res) => {
   try {
     const got = req.query.fresh
-      ? await fetchSalesPages(5)
-      : await cached("sales:10", 300000, () => fetchSalesPages(10));
+      ? await fetchSalesPages(8)
+      : await cached("sales:10", 300000, () => fetchSalesPages(15));
     if (got.error) {
       const saved = loadDiskCache().pending;
       if (saved) return res.json({ ...saved.data, stale: true });
@@ -735,7 +735,7 @@ app.get("/api/pending", async (req, res) => {
       totalPending: Object.values(rel).reduce((s, v) => s + v, 0),
       lastDate: sorted.length ? sorted[sorted.length - 1][0] : null,
       pendingRobux: upcoming.reduce((s, u) => s + u.robux, 0),
-      items: pendList.slice(0, 200),
+      items: pendList,
       savedAt: new Date().toISOString(),
     };
     saveDiskCache({ pending: { at: Date.now(), data: out } });

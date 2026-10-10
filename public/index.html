@@ -447,7 +447,7 @@ if(ALL_MODE) return renderTxAll(q);
 q=(q||"").toLowerCase();
 const pool=(DATA?.salesList&&DATA.salesList.length?DATA.salesList:(DATA?.transactions||[]));
 const all=pool.filter(t=>(t.buyerName||"").toLowerCase().includes(q)||(t.assetName||"").toLowerCase().includes(q));
-const tx=all.slice(0,300);
+const tx=all.slice(0,500);
 $("txwrap").innerHTML=tx.length?`<table class="datatable"><tr><th>Horário</th><th>Item</th><th>Comprador</th><th style="text-align:right">Valor</th></tr>${tx.map(txRow).join("")}</table><p class="msg">Mostrando ${tx.length} de ${fmt(all.length)} no filtro.</p>`:"<p class='msg'>Nada neste filtro.</p>";
 const mini=(DATA?.transactions||[]).slice(0,5);
 $("tx-mini").innerHTML=mini.length?`<table class="datatable">${mini.map(txRow).join("")}</table>`:"<p class='msg'>Sem vendas ainda.</p>";
@@ -488,7 +488,7 @@ const last=(DATA?.transactions||[]).slice(0,10);
 B.innerHTML=`<p class="msg"><b style="color:#fff;font-size:20px">${$("k-disp").textContent}</b> disponíveis no grupo</p><h4>Últimas compras</h4>`+(last.length?tbl(last):"<p class='msg'>—</p>")+`<p class="msg">O Roblox libera em ~30 dias após cada venda.</p>`;
 }else if(kind==="pend"){
 const items=p.items||[];
-B.innerHTML=`<p class="msg"><b style="color:#fff;font-size:20px">${$("k-pend").textContent}</b> pendentes em ${items.length} vendas${p.stale?" • ⚠ salvos de "+new Date(p.savedAt).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):""}</p><div style="max-height:340px;overflow:auto"><table class="datatable"><tr><th>Item</th><th>Libera em</th><th style="text-align:right">Valor</th></tr>${items.slice(0,200).map(i=>`<tr><td>${i.assetName}</td><td>${i.release}</td><td style="text-align:right">${fmt(i.robux)}</td></tr>`).join("")}</table></div>`;
+B.innerHTML=`<p class="msg"><b style="color:#fff;font-size:20px">${$("k-pend").textContent}</b> pendentes em ${items.length} vendas${p.stale?" • ⚠ salvos":""}</p><div style="max-height:340px;overflow:auto"><table class="datatable"><tr><th>Item</th><th>Libera em</th><th style="text-align:right">Valor</th></tr>${items.slice(0,500).map(i=>`<tr><td>${i.assetName}</td><td>${i.release}</td><td style="text-align:right">${fmt(i.robux)}</td></tr>`).join("")}</table></div><p class="msg">Mostrando ${Math.min(items.length,500)} de ${items.length}.</p>`;
 }else{
 const up=p.upcoming||[];
 const tot=up.reduce((s,u)=>s+u.robux,0);
