@@ -566,7 +566,7 @@ app.get("/api/analytics", async (req, res) => {
         month: monthR.ok ? sumRevenue(await readJson(monthR)) : null,
       };
     });
-    const pages = 15;
+    const pages = 25;
     const untilDate = new Date(dayKeys[0] + "T00:00:00");
     const got = await cached("salesR:" + dayKeys[0], 45000, () => fetchSalesPages(pages, untilDate));
     if (got.error) {
@@ -633,7 +633,7 @@ app.get("/api/analytics", async (req, res) => {
       revenueToday, todayCount: todayTxs.length, revenuePeriod: totalRobux, official,
       sales, salesTotalRobux: totalRobux, ticketMedio, savedAt: new Date().toISOString(),
       byDay, byHour, transactions, salesList, ranking,
-      todayList: todayTxs.slice(0, 200).map((t) => {
+      todayList: todayTxs.slice(0, 500).map((t) => {
         const a = getAsset(t);
         return { id: t.id, created: t.created, robux: getRobux(t), assetName: a.name, assetId: a.id, buyerName: t.agent?.name || null, buyerId: t.agent?.id || null, buyerType: t.agent?.type || null };
       }),
