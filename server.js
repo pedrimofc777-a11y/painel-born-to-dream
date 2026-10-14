@@ -2,6 +2,11 @@ require("dotenv").config();
 const express = require("express");
 const path = require("path");
 const fs = require("fs");
+const { log } = require("./lib/logger");
+const guard = require("./lib/guard");
+const store = require("./lib/store");
+const { expo, delay } = require("./lib/backoff");
+const L = log("server");
 
 const app = express();
 app.use(express.json({ limit: "256kb" }));
@@ -9,6 +14,10 @@ const PORT = process.env.PORT || 3000;
 const GROUP_ID = process.env.ROBLOX_GROUP_ID || "190007685";
 const API_KEY = process.env.ROBLOX_API_KEY || "";
 const COOKIE_RAW = process.env.ROBLOX_COOKIE || "";
+const PANEL_PASS = process.env.PANEL_PASS || "";
+if (!PANEL_PASS && process.env.NODE_ENV === "production") {
+  L.warn("PANEL_PASS não definido — defina uma senha no .env para proteger o painel");
+}
 const OPENAI_API_KEY = process.env.OPENAI_API_KEY || "";
 const OPENAI_MODEL = process.env.OPENAI_MODEL || "gpt-4o-mini";
 const AI_PROVIDER = (process.env.AI_PROVIDER || "").toLowerCase();
@@ -73,13 +82,25 @@ async function askFreeAI(message, ctx) {
   } catch { return null; }
 }
 
-// cabeçalhos básicos de segurança
-app.use((req, res, next) => {
-  res.setHeader("X-Content-Type-Options", "nosniff");
-  res.setHeader("X-Frame-Options", "DENY");
-  res.setHeader("Referrer-Policy", "no-referrer");
-  next();
-});
+// ── middlewares globais ──
+app.use(guard.secureHeaders);
+app.set("trust proxy", 1);
+app.use(guard.rateLimiter({ windowMs: 60000, max: 300, key: "global" }));
+// arquivos estáticos ANTES do auth (senão nem a tela de login carrega)
+app.use(express.static(path.join(__dirname, "public")));
+// login lento de propósito (anti força bruta)
+app.use("/api/login", guard.rateLimiter({ windowMs: 300000, max: 12, key: "login" }));
+// rotas que batem no Roblox / OpenAI: mais restritas
+app.use("/api/analytics", guard.rateLimiter({ windowMs: 60000, max: 30, key: "analytics" }));
+app.use("/api/chat", guard.rateLimiter({ windowMs: 60000, max: 12, key: "chat" }));
+app.use("/api/chat-room", guard.rateLimiter({ windowMs: 60000, max: 20, key: "chatroom" }));
+app.use("/api/members", guard.rateLimiter({ windowMs: 60000, max: 60, key: "members" }));
+app.use("/api/members/search", guard.rateLimiter({ windowMs: 60000, max: 30, key: "search" }));
+app.use("/api/user/lookup", guard.rateLimiter({ windowMs: 60000, max: 40, key: "lookup" }));
+app.use("/api/product", guard.rateLimiter({ windowMs: 60000, max: 40, key: "product" }));
+app.use("/api/pending", guard.rateLimiter({ windowMs: 60000, max: 20, key: "pending" }));
+// autenticação: tudo /api/* fechado, exceto whitelist
+app.use(guard.authGate);
 
 const DATA_DIR = path.join(__dirname, "data");
 try { fs.mkdirSync(DATA_DIR, { recursive: true }); } catch {}
@@ -212,9 +233,11 @@ async function pubGet(url, tries = 3) {
 }
 // cache curto: evita martelar o Roblox (que limita e devolve vazio)
 const cache = new Map();
+let cacheHits = 0, cacheMisses = 0;
 async function cached(key, ttlMs, fn) {
   const hit = cache.get(key);
-  if (hit && Date.now() - hit.at < ttlMs) return { ...(hit.data), cached: true };
+  if (hit && Date.now() - hit.at < ttlMs) { cacheHits++; return { ...(hit.data), cached: true }; }
+  cacheMisses++;
   const data = await fn();
   cache.set(key, { at: Date.now(), data });
   if (cache.size > 60) cache.delete(cache.keys().next().value);
@@ -233,7 +256,95 @@ function getAsset(t = {}) {
   return { name: d.name || t.assetName || "Item", id: d.id ?? t.assetId ?? null };
 }
 
-app.use(express.static(path.join(__dirname, "public")));
+/* contador de falhas seguidas por período (backoff) */
+const partialFails = new Map();
+setInterval(() => { if (partialFails.size > 40) partialFails.clear(); }, 10 * 60 * 1000).unref();
+
+/* ── healthcheck (monitorar uptime) ── */app.get("/healthz", (_req, res) => {
+  res.json({
+    ok: true,
+    uptime: Math.round(process.uptime()),
+    store: store.status(),
+    cache: { mem: cache.size, hits: cacheHits, misses: cacheMisses },
+    roblox: COOKIE_RAW ? "cookie-ok" : "sem-cookie",
+    ia: !!(OPENAI_API_KEY || AI_PROVIDER),
+  });
+});
+
+/* ─- login ── */
+app.get("/api/me", (req, res) => {
+  res.json({ authed: true, since: Date.now() });
+});
+
+app.post("/api/login", (req, res) => {
+  const pass = String((req.body || {}).password || "");
+  if (!PANEL_PASS) {
+    return res.status(503).json({ error: "Painel sem senha configurada. Defina PANEL_PASS no .env e reinicie." });
+  }
+  if (!guard.safeEqual(pass, PANEL_PASS)) {
+    L.warn("login falhou", { ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress });
+    return res.status(401).json({ error: "Senha incorreta." });
+  }
+  guard.setSession(res, "painel");
+  L.info("login ok", { ip: req.headers["x-forwarded-for"] || req.socket.remoteAddress });
+  res.json({ ok: true });
+});
+
+app.post("/api/logout", (_req, res) => {
+  guard.clearSession(res);
+  res.json({ ok: true });
+});
+
+/* ── metas configuráveis ── */
+const DEFAULT_GOALS = { goals: [50, 100, 200, 300, 500, 750, 1000, 1500, 2000, 3000, 5000], period: 30 };
+app.get("/api/goals", async (_req, res) => {
+  const g = await store.read("goals", DEFAULT_GOALS);
+  res.json(g && Array.isArray(g.goals) ? g : DEFAULT_GOALS);
+});
+app.put("/api/goals", async (req, res) => {
+  const goals = (Array.isArray(req.body && req.body.goals) ? req.body.goals : [])
+    .map((n) => Math.max(1, Math.min(1000000, Math.round(Number(n) || 0))))
+    .filter((n) => n > 0)
+    .sort((a, b) => a - b)
+    .slice(0, 20);
+  const period = Math.max(1, Math.min(365, Math.round(Number((req.body || {}).period) || 30)));
+  const saved = await store.write("goals", { goals, period });
+  L.info("metas atualizadas", saved);
+  res.json(saved);
+});
+
+/* ── exportar CSV (planilha de vendas) ── */
+function csvCell(v) {
+  const s = v == null ? "" : String(v);
+  return /[",;\n]/.test(s) ? '"' + s.replace(/"/g, '""') + '"' : s;
+}
+app.get("/api/export/csv", async (req, res) => {
+  const days = Math.max(1, Math.min(365, parseInt(req.query.days, 10) || 30));
+  const q = req.query.start && req.query.end ? `start=${req.query.start}&end=${req.query.end}` : `days=${days}`;
+  try {
+    const r = await fetch("http://127.0.0.1:" + PORT + "/api/analytics?" + q, { headers: { cookie: req.headers.cookie || "", authorization: req.headers.authorization || "" } });
+    const a = await r.json();
+    const rows = [["Data", "Hora", "Item", "ID do item", "Comprador", "ID do comprador", "Robux"]];
+    (a.transactions || []).forEach((t) => {
+      const d = new Date(t.created);
+      const sp = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).formatToParts(d);
+      const g = (ty) => (sp.find((p) => p.type === ty) || {}).value || "";
+      rows.push([
+        `${g("day")}/${g("month")}/${g("year")}`,
+        `${g("hour")}:${g("minute")}`,
+        t.assetName || "", t.assetId || "", t.buyerName || "", t.buyerId || "", getRobux(t),
+      ]);
+    });
+    const csv = "\uFEFF" + rows.map((r2) => r2.map(csvCell).join(";")).join("\r\n");
+    const fname = `vendas-${q.replace(/[^a-z0-9=]/gi, "-")}.csv`;
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", `attachment; filename="${fname}"`);
+    res.send(csv);
+    L.info("csv exportado", { rows: rows.length - 1, q });
+  } catch (e) {
+    res.status(500).json({ error: "Falha ao gerar CSV: " + e.message });
+  }
+});
 
 app.get("/api/config", (_req, res) => {
   res.json({ groupId: GROUP_ID });
@@ -553,6 +664,8 @@ app.get("/api/analytics", async (req, res) => {
     }
     return res.json(obj);
   };
+  // backoff exponencial: se o Roblox recusou, o front espera mais a cada falha seguida
+  const fails = partialFails.get(akey) || 0;
   try {
     const official = await cached("official", 180000, async () => {
       const [dayR, weekR, monthR] = await Promise.all([
@@ -570,11 +683,14 @@ app.get("/api/analytics", async (req, res) => {
     const untilDate = new Date(dayKeys[0] + "T00:00:00");
     const got = await cached("salesR:" + dayKeys[0], 45000, () => fetchSalesPages(pages, untilDate));
     if (got.error) {
-      console.log("[tx] erro", got.error.status, JSON.stringify(got.error.data).slice(0, 200));
+      L.warn("falha ao buscar vendas", { status: got.error.status });
       const saved = loadDiskCache()[akey];
-      if (saved) return res.json({ ...saved.data, stale: true });
-      return sendA({ available: true, partial: true, days: dayKeys.length, official, sales: null, ticketMedio: null, byDay: [], byHour: [], transactions: [], txError: got.error.status || "?" }, 15000);
+      partialFails.set(akey, fails + 1);
+      const wait = expo(fails, 15000, 300000);
+      if (saved) return res.json({ ...saved.data, stale: true, retryAfter: wait });
+      return sendA({ available: true, partial: true, days: dayKeys.length, official, sales: null, ticketMedio: null, byDay: [], byHour: [], transactions: [], txError: got.error.status || "?", retryAfter: wait }, 15000);
     }
+    partialFails.delete(akey);
     const txs = got.txs;
     const set = new Set(dayKeys);
     const todaySp = spDateKey(new Date());
@@ -1013,12 +1129,20 @@ app.post("/api/chat", async (req, res) => {
   } catch { return res.json({ reply: "Tive um problema ao buscar os números. Tente de novo em instantes." }); }
 });
 
+/* 404 de API antes do catch-all (evita HTML com 200 em rota inexistente) */
+app.use("/api", (req, res) => {
+  res.status(404).json({ error: "Rota não encontrada: " + req.path });
+});
+
 app.get("*", (_req, res) => {
   res.sendFile(path.join(__dirname, "public", "index.html"));
 });
 
 app.listen(PORT, () => {
-  console.log(`Dashboard: http://localhost:${PORT} (grupo ${GROUP_ID})`);
+  L.info(`dashboard no ar em http://localhost:${PORT}`, { grupo: GROUP_ID, store: store.status() });
+  store.syncFromKV(["goals", "snapshot", "events"]).then((n) => {
+    if (n) L.info("espelho KV sincronizado", { chaves: n });
+  }).catch(() => {});
   // pré-aquece o cache pesado (90 dias) para abrir rápido
   if (COOKIE_RAW) {
     const warm = async () => {

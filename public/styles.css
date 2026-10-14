@@ -25,3 +25,42 @@ footer{padding:22px 2px 4px;color:#5e626d;font-size:9px}footer span{color:#777}
 .unavailable-state strong{font-size:13px}
 .unavailable-state p{max-width:420px;margin:7px 0 0;color:var(--muted);font-size:10px;line-height:1.5}
 .unavailable-state.compact{height:235px}
+
+/* ── melhorias: skeleton, números, sidebar mobile, metas, csv ── */
+.tabnum{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+.card strong,.kpi b,.datatable td:last-child,.receita-detail b{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+.pill-skel{display:inline-flex;align-items:center;gap:5px;padding:4px 2px}
+.skel{display:inline-block;height:1em;border-radius:5px;background:linear-gradient(90deg,#22252c 25%,#2e323a 50%,#22252c 75%);
+  background-size:200% 100%;animation:shim 1.2s linear infinite;vertical-align:middle}
+@keyframes shim{0%{background-position:200% 0}100%{background-position:-200% 0}}
+.card.loading strong{color:transparent}
+.csvbar{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px;align-items:center}
+.csvbar .fbtn{display:inline-flex;align-items:center;gap:5px}
+.goalbox{border:1px solid var(--line);background:#111318;border-radius:10px;padding:12px;margin-bottom:8px}
+.goalbox .ghead{display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap}
+.goalbox .bar{height:7px;border-radius:99px;background:#22252c;overflow:hidden;margin-top:8px}
+.goalbox .bar i{display:block;height:100%;background:linear-gradient(90deg,var(--orange),#ffb066);border-radius:99px;transition:width .5s}
+.goalbox b{font-size:12px}
+.goalbox small{color:var(--muted);font-size:10px}
+.goalform{display:flex;gap:6px;flex-wrap:wrap;align-items:flex-end}
+.goalform label{font-size:9px;color:var(--muted);text-transform:uppercase;letter-spacing:.1em;display:block;margin-bottom:3px}
+.goalform input{background:#1a1c21;border:1px solid var(--line);color:#eee;padding:8px 10px;border-radius:8px;font-size:12px;width:120px}
+.tip.meta{display:flex;justify-content:space-between;gap:8px;align-items:flex-start}
+.tip.meta button{flex:none}
+
+/* sidebar: no mobile vira bottom bar com rótulo */
+@media(max-width:720px){
+  .sidebar{width:100%;inset:auto 0 0 0;height:auto;flex-direction:row;align-items:center;gap:4px;
+    padding:6px 6px calc(6px + env(safe-area-inset-bottom));border-right:0;border-top:1px solid var(--line);
+    overflow-x:auto;z-index:20;background:#101115ee;backdrop-filter:blur(8px)}
+  .sidebar .brand{display:none}
+  .sidebar nav{display:flex;flex-direction:row;gap:4px;flex:1}
+  .nav{flex:1;min-width:64px;text-align:center;padding:8px 4px;font-size:9px;display:flex;
+    flex-direction:column;align-items:center;gap:3px;white-space:nowrap;border-radius:9px}
+  .nav.active{box-shadow:inset 0 -2px var(--orange)}
+  .nav span{margin-left:0;font-size:9px;letter-spacing:.02em}
+  .sidebar-bottom{border:0;padding:0 6px;margin:0;flex:none}
+  .sidebar-bottom small,.sidebar-bottom strong{display:none}
+  .status-dot{width:9px;height:9px}
+  .main{margin-left:0;width:100%;padding:16px 11px 84px}
+}

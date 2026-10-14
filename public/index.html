@@ -135,7 +135,7 @@
 <img src="/logo.png" alt="" class="logo" onerror="this.outerHTML='<div class=\'logo\'>B</div>'">
 <div><h1 id="groupName">Born to Dream</h1><small id="clock">—</small></div>
 <div class="top-right"><strong>Id do grupo: <span id="groupId">—</span></strong></div>
-<div class="top-btns"><button class="iconbtn" id="sfxBtn" title="Sons de clique">🖱️</button><button class="iconbtn" id="musicBtn" title="Música">🎵</button><button class="iconbtn" onclick="loadAll(true)" title="Atualizar agora">↻ Atualizar</button></div>
+<div class="top-btns"><button class="iconbtn" id="sfxBtn" title="Sons de clique" aria-label="Ligar/desligar sons de clique">🖱️</button><button class="iconbtn" id="musicBtn" title="Música" aria-label="Ligar/desligar música">🎵</button><button class="iconbtn" onclick="loadAll(true)" title="Atualizar agora" aria-label="Atualizar agora">↻ Atualizar</button></div>
 </div>
 
 <div id="view-dashboard" class="view active">
@@ -203,7 +203,20 @@
 <div id="view-assistente" class="view">
 <article class="panel"><div class="panel-head"><div><h3>Assistente</h3><span>O que melhorar e erros</span></div><div style="display:flex;gap:6px"><button class="fbtn" onclick="loadDaily()">Atualizar análise</button></div></div>
 <div class="tip" id="dailyBox"><b>📊 Análise de hoje</b><span class="msg">Carregando...</span></div>
+<div class="goalbox"><div class="ghead"><b>🎯 Metas dos últimos 30 dias</b><button class="fbtn" onclick="mbToggleGoalForm()">Editar</button></div><div id="goalBox"></div>
+  <div id="goalForm" style="display:none;margin-top:10px">
+    <div class="goalform">
+      <div><label>Metas (separe por vírgula)</label><input id="goalIn" placeholder="100,500,1000"></div>
+      <div><label>Período</label><input id="goalPeriod" type="number" value="30" min="1" max="90"></div>
+      <button class="fbtn" onclick="saveGoals()">Salvar</button>
+    </div>
+  </div>
+</div>
 <div id="assistant"></div>
+<div style="display:flex;gap:6px;flex-wrap:wrap;margin:8px 0">
+  <button class="fbtn" onclick="exportCsv()">⤓ Exportar CSV do período</button>
+  <button class="fbtn" onclick="mbLogout()">⎋ Sair do painel</button>
+</div>
 <div class="chat" style="margin-top:12px"><div style="display:flex;justify-content:flex-end"><button class="fbtn" onclick="clearChat()">Limpar conversa</button></div><div id="chatLog"></div>
 <div style="display:flex;gap:8px"><input id="chatIn" placeholder="Pergunte sobre o grupo..." style="flex:1;background:#1a1c21;border:1px solid var(--line);color:#eee;padding:10px;border-radius:9px"><button onclick="sendChat()" style="background:var(--orange);border:0;padding:10px 16px;border-radius:9px;font-weight:800;cursor:pointer">Enviar</button></div></div></article>
 </div>
@@ -214,9 +227,72 @@
 <script>
 let DAYS=1, CUSTOM=null, DATA=null, LAST_TX=null, chartType={dia:"bar",hora:"bar",dia2:"bar"};
 let memCursor="", memLoaded=[], memRole="", ALL_TX=[], ALL_MODE=false;
+// ── sessão: sem login, vai para a tela de senha ──
+(async()=>{ try{ const r=await fetch("/api/me"); if(r.status===401||r.status===503){
+  location.replace("/login.html?next="+encodeURIComponent(location.pathname+location.search)); } }catch{} })();
+// ── metas configuráveis (vêm do servidor) ──
+let GOALS=[];
+async function loadGoals(){
+  try{ const j=await(await fetch("/api/goals")).json(); GOALS=(j.goals||[]).slice(); }catch{ GOALS=[]; }
+  paintGoals();
+}
+function salesIn30(){
+  const d=DATA&&DATA.byDay||[];
+  return d.slice(0,30).reduce((s,x)=>s+(x.robux||0),0);
+}
+function paintGoals(){
+  const box=$("goalBox"); if(!box) return;
+  if(!GOALS.length){ box.innerHTML="<p class='msg'>Nenhuma meta definida. Adicione uma abaixo.</p>"; return; }
+  const s=salesIn30();
+  box.innerHTML=GOALS.map(g=>{
+    const pct=Math.max(0,Math.min(100,Math.round(s/g*100)));
+    const done=s>=g;
+    return `<div class="goalbox"><div class="ghead"><b>${fmt(g)} ${done?'<span class="tag g">batida</span>':'<span class="tag n">'+pct+'%</span>'}</b><small>${fmt(s)} / ${fmt(g)} em 30 dias</small></div><div class="bar"><i style="width:${pct}%"></i></div></div>`;
+  }).join("");
+}
+window.saveGoals=async()=>{
+  const v=$("goalIn").value||"";
+  const goals=v.split(/[,;.\s]+/).map(n=>parseInt(n,10)).filter(n=>n>0);
+  const period=parseInt($("goalPeriod").value||"30",10)||30;
+  try{
+    const j=await(await fetch("/api/goals",{method:"PUT",headers:{"Content-Type":"application/json"},body:JSON.stringify({goals,period})})).json();
+    GOALS=j.goals||[]; paintGoals(); loadAnalytics(); MB_toast("Metas salvas");
+  }catch{}
+};
+// skeleton de carregamento nos cards
+function mbSkeleton(on){
+  document.querySelectorAll(".cards .card strong").forEach(el=>{
+    if(on){ if(!el.dataset.real) el.dataset.real=el.textContent; el.classList.add("loading"); el.innerHTML='<span class="skel" style="width:64px"></span>'; }
+    else if(el.dataset.real!==undefined){ el.classList.remove("loading"); el.textContent=el.dataset.real; delete el.dataset.real; }
+  });
+}
+// baixar CSV do filtro atual
+function exportCsv(){
+  const q=CUSTOM?`start=${CUSTOM.start}&end=${CUSTOM.end}`:`days=${DAYS}`;
+  location.href="/api/export/csv?"+q;
+  MB_toast("Gerando planilha...");
+}
+window.mbToggleGoalForm=()=>{
+  const f=$("goalForm");
+  const open=f.style.display!=="none";
+  f.style.display=open?"none":"block";
+  if(!open){ $("goalIn").value=GOALS.join(","); $("goalPeriod").value=30; }
+};
+window.mbLogout=async()=>{
+  try{ await fetch("/api/logout",{method:"POST"}); }catch{}
+  location.replace("/login.html");
+};
 const fmt=n=>Number(n||0).toLocaleString("pt-BR");
 const fmt1=n=>Number(n||0).toLocaleString("pt-BR",{maximumFractionDigits:2});
 const $=id=>document.getElementById(id);
+function MB_toast(msg){
+  let t=document.getElementById("mbToast");
+  if(!t){ t=document.createElement("div"); t.id="mbToast";
+    t.style.cssText="position:fixed;bottom:18px;right:18px;background:#14161b;border:1px solid #3a2a1a;color:#fff;padding:11px 15px;border-radius:10px;font-size:12px;z-index:60;box-shadow:0 8px 30px rgba(0,0,0,.5)";
+    document.body.appendChild(t); }
+  t.textContent=msg; t.style.opacity="1"; t.style.transition="opacity .3s";
+  clearTimeout(t._h); t._h=setTimeout(()=>{ t.style.opacity="0"; },2200);
+}
 async function api(p,o={}){ const h={}; if(o.body) h["Content-Type"]="application/json"; const r=await fetch(p,{...o,headers:{...h,...(o.headers||{})}}); return r; }
 
 document.querySelectorAll("#nav .nav").forEach(b=>b.onclick=()=>{ document.querySelectorAll("#nav .nav").forEach(x=>x.classList.remove("active")); b.classList.add("active"); document.querySelectorAll(".view").forEach(v=>v.classList.remove("active")); $("view-"+b.dataset.tab).classList.add("active"); window.scrollTo(0,0); const m=document.querySelector(".main"); if(m) m.scrollTo(0,0); loadAnalytics(); });
@@ -406,12 +482,23 @@ $("k-tom-s").textContent="cai em "+(p.oldestDate||"—");
 
 async function loadAnalytics(){
 window._loading=true;
+if(DATA===null) mbSkeleton(true);
 let url="/api/analytics?"+(CUSTOM?`start=${CUSTOM.start}&end=${CUSTOM.end}`:`days=${DAYS}`);
 $("status").textContent="↻ Buscando vendas...";
 let r,a;
-try{ r=await api(url); a=await r.json(); }catch{ $("status").textContent="Falha de rede."; window._loading=false; return; }
+try{ r=await api(url); a=await r.json(); }catch{ $("status").textContent="Falha de rede."; window._loading=false; mbSkeleton(false); return; }
+if(r.status===401){ location.replace("/login.html?next="+encodeURIComponent(location.pathname+location.search)); return; }
+mbSkeleton(false);
 if(!r.ok||a.available===false){ $("status").textContent="⚠ Dados indisponíveis no momento."; $("connection").textContent="Instável"; window._loading=false; return; }
-if(a.partial||a.sales==null||a.stale){ $("status").textContent=a.txError?`⚠ Roblox recusou (erro ${a.txError}) — vendo o terminal`:"↻ Sincronizando com o Roblox, tentando de novo em instantes..."; clearTimeout(window._retryT); window._retryT=setTimeout(()=>{ if(isLeader()) loadAnalytics(); },15000); }
+if(a.partial||a.sales==null||a.stale){
+  $("status").textContent=a.txError?`⚠ Roblox recusou (erro ${a.txError}) — vendo o terminal`:"↻ Sincronizando com o Roblox, tentando de novo em instantes...";
+  clearTimeout(window._retryT);
+  // backoff exponencial: respeita o retryAfter do servidor e dobra a cada falha
+  window._fails=(window._fails||0)+1;
+  const wait=Math.max(15000,(a.retryAfter||Math.min(15000*Math.pow(2,window._fails-1),300000)));
+  window._retryT=setTimeout(()=>{ if(isLeader()) loadAnalytics(); },wait);
+}
+if(!a.partial&&a.sales!=null) window._fails=0;
 const prevFirst=LAST_TX;
 const isNew=prevFirst&&a.transactions.length&&a.transactions[0].id!==prevFirst;
 if(a.transactions.length){
@@ -434,7 +521,7 @@ $("k-ticket").textContent=fmt1(a.ticketMedio);
 $("sub-dia").textContent=a.range||`${a.days} dias`;
 $("rec-range").textContent=a.range||`${a.days} dias`;
 $("sub-txmini").textContent="5 mais recentes";
-renderAllCharts(); renderTx($("qTx").value||""); renderRanking(); buildAssistant(a); window._loading=false;
+renderAllCharts(); renderTx($("qTx").value||""); renderRanking(); buildAssistant(a); paintGoals(); window._loading=false;
 const tot=(a.byHour||[]).reduce((s,h)=>s+h.robux,0);
 $("bestHourLine").textContent=!tot?"Sem vendas hoje ainda.":"Melhor horário hoje: "+[...a.byHour].sort((x,y)=>y.robux-x.robux)[0].label+" com "+fmt([...a.byHour].sort((x,y)=>y.robux-x.robux)[0].robux)+".";
 $("receita-detail").innerHTML=`<p class="msg"><b style="color:#fff;font-size:18px">Hoje: ${fmt(a.revenueToday)}</b> em ${fmt(a.todayCount??0)} vendas<br><b style="color:#fff;font-size:18px">Período: ${fmt(a.revenuePeriod)}</b> em ${fmt(a.sales)} vendas<br>Robux médio por venda: <b style="color:#fff">${fmt1(a.ticketMedio)}</b></p>`;
@@ -451,7 +538,7 @@ q=(q||"").toLowerCase();
 const pool=(DATA?.salesList&&DATA.salesList.length?DATA.salesList:(DATA?.transactions||[]));
 const all=pool.filter(t=>(t.buyerName||"").toLowerCase().includes(q)||(t.assetName||"").toLowerCase().includes(q));
 const tx=all.slice(0,500);
-$("txwrap").innerHTML=tx.length?`<table class="datatable"><tr><th>Horário</th><th>Item</th><th>Comprador</th><th style="text-align:right">Valor</th></tr>${tx.map(txRow).join("")}</table><p class="msg">Mostrando ${tx.length} de ${fmt(all.length)} no filtro.</p>`:"<p class='msg'>Nada neste filtro.</p>";
+$("txwrap").innerHTML=tx.length?`<table class="datatable"><tr><th>Horário</th><th>Item</th><th>Comprador</th><th style="text-align:right">Valor</th></tr>${tx.map(txRow).join("")}</table><div class="csvbar"><button class="fbtn" onclick="exportCsv()">⤓ Baixar CSV</button><p class="msg">Mostrando ${tx.length} de ${fmt(all.length)} no filtro.</p></div>`:"<p class='msg'>Nada neste filtro.</p>";
 const mini=(DATA?.transactions||[]).slice(0,5);
 $("tx-mini").innerHTML=mini.length?`<table class="datatable">${mini.map(txRow).join("")}</table>`:"<p class='msg'>Sem vendas ainda.</p>";
 }
@@ -460,7 +547,8 @@ q=(q||"").toLowerCase();
 const tx=ALL_TX.filter(t=>(t.buyerName||"").toLowerCase().includes(q)||(t.assetName||"").toLowerCase().includes(q));
 $("txwrap").innerHTML=`<table class="datatable"><tr><th>Horário</th><th>Item</th><th>Comprador</th><th style="text-align:right">Valor</th></tr>${tx.slice(0,500).map(txRow).join("")}</table><p class="msg">Mostrando ${Math.min(tx.length,500)} de ${fmt(tx.length)}.</p>`;
 }
-$("qTx").oninput=e=>renderTx(e.target.value);
+$("qTx").oninput=mbDebounce(e=>renderTx(e.target.value),220);
+function mbDebounce(fn,ms){ let t; return function(){ const a=arguments,c=this; clearTimeout(t); t=setTimeout(()=>fn.apply(c,a),ms); }; }
 
 function renderRanking(){
 const rk=DATA?.ranking||[];
@@ -556,13 +644,13 @@ async function sendChat(){
 const inp=$("chatIn"); const msg=inp.value.trim(); if(!msg) return; inp.value="";
 $("chatLog").innerHTML+=`<div class="u"><span>${msg.replace(/</g,"&lt;")}</span></div>`;
 chatSave("u",msg);
+$("chatLog").scrollTop=9999;
 const tp=document.createElement("div"); tp.className="b"; tp.innerHTML='<span class="tdots"><i></i><i></i><i></i></span>';
 $("chatLog").appendChild(tp); $("chatLog").scrollTop=9999;
 let j={};
 try{
 let hist=[]; try{ hist=JSON.parse(localStorage.getItem("chat_hist")||"[]").slice(-6); }catch{}
 j=await (await api("/api/chat",{method:"POST",body:JSON.stringify({message:msg,history:hist})})).json(); }catch{}
-await new Promise(r=>setTimeout(r,500+Math.min((j&&j.reply||"").length*8,1500)));
 tp.outerHTML=`<div class="b"><span>${((j&&j.reply)||"...").replace(/</g,"&lt;")}</span></div>`;
 chatSave("b",(j&&j.reply)||"...");
 $("chatLog").scrollTop=9999;
@@ -655,7 +743,7 @@ for(let i=0;i<5;i++){ const s=document.createElement("span"); s.textContent=t.e2
 }
 // confete ao bater nova meta (1x no dia)
 function checkMeta(sales30){
-const METAS=[50,100,200,300,500,750,1000,1500,2000,3000,5000];
+const METAS=GOALS.length?GOALS:[50,100,200,300,500,750,1000,1500,2000,3000,5000];
 const hit=[...METAS].reverse().find(m=>sales30>=m);
 if(!hit) return;
 let st={}; try{ st=JSON.parse(localStorage.getItem("confettiMeta")||"{}"); }catch{}
@@ -697,7 +785,7 @@ const shown=list.slice(0,500);
 $("memList").innerHTML=list.length?`<table class="datatable"><tr><th>ID</th><th>Usuário</th><th>Nome</th><th style="text-align:right">Perfil</th></tr>${shown.map(m=>`<tr><td>${m.userId}</td><td><a href="#" onclick="showProfile('${m.username}');return false">@${m.username}</a></td><td><a href="#" onclick="showProfile('${m.username}');return false" style="color:#fff">${m.displayName}</a></td><td style="text-align:right"><a href="https://www.roblox.com/users/${m.userId}/profile" target="_blank">Abrir</a></td></tr>`).join("")}</table><p class="msg">${fmt(shown.length)} de ${fmt(list.length)} (filtrados de ${fmt(memLoaded.length)} carregados). Clique num nome para ver o perfil.</p>`:"<p class='msg'>Digite acima para buscar qualquer pessoa do grupo.</p>";
 }
 
-async function loadAll(){ if(!(await brGate())) return; applyTheme(); checkMetaSoon(); await loadGroup(); await loadAnalytics(); loadTodosPreview(); loadDaily(); loadChatHistory(); }
+async function loadAll(){ if(!(await brGate())) return; applyTheme(); checkMetaSoon(); await loadGroup(); await loadAnalytics(); loadTodosPreview(); loadDaily(); loadChatHistory(); loadGoals(); }
 if("serviceWorker" in navigator){ window.addEventListener("load",()=>{ try{ navigator.serviceWorker.register("/sw.js"); }catch{} }); }
 loadAll();
 setInterval(async()=>{ // vigia rápido: confere venda nova e atualiza na hora

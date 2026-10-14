@@ -1,0 +1,72 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Entrar — Born to Dream</title>
+<meta name="theme-color" content="#ff7a00">
+<meta name="robots" content="noindex, nofollow">
+<link rel="icon" href="/icon-192.png">
+<link rel="stylesheet" href="/styles.css">
+<style>
+.lg-wrap{position:fixed;inset:0;display:grid;place-items:center;padding:16px;
+  background:radial-gradient(circle at 50% 18%,#241105,#060607 70%)}
+.lg-box{width:min(380px,94vw);background:#14161b;border:1px solid #3a2a1a;border-radius:16px;padding:30px 26px;text-align:center}
+.lg-box .brand{justify-content:center;margin:0 0 22px}
+.lg-box h1{margin:0 0 6px;font-size:19px}
+.lg-box p{margin:0 0 18px;color:var(--muted);font-size:11px;line-height:1.5}
+.lg-box input{width:100%;background:#1a1c21;border:1px solid var(--line);color:#eee;padding:13px;border-radius:9px;margin-bottom:10px;box-sizing:border-box;font-size:14px;text-align:center;letter-spacing:.18em}
+.lg-box input:focus{outline:none;border-color:var(--orange)}
+.lg-box button{width:100%;background:var(--orange);border:0;padding:13px;border-radius:9px;font-weight:800;cursor:pointer;font-size:14px;color:#111}
+.lg-box button:disabled{opacity:.6;cursor:wait}
+.lg-err{min-height:16px;color:#ff9b9b;font-size:11px;margin:2px 0 8px}
+.lg-hint{margin-top:16px;color:#5e626d;font-size:10px;line-height:1.5}
+.lg-toggle{background:none;border:0;color:var(--orange2);font-size:11px;cursor:pointer;margin-top:6px;padding:4px}
+</style>
+</head>
+<body>
+<div class="lg-wrap">
+  <div class="lg-box">
+    <div class="brand"><div class="brand-mark">B</div><div><strong>Born to Dream</strong><span>Dashboard</span></div></div>
+    <h1 id="lgTitle">Painel protegido</h1>
+    <p id="lgSub">Digite a senha do painel para continuar.</p>
+    <form id="lgForm" autocomplete="off">
+      <input id="lgPass" type="password" placeholder="••••••••" autocomplete="current-password" autofocus>
+      <div class="lg-err" id="lgErr"></div>
+      <button id="lgBtn" type="submit">Entrar</button>
+    </form>
+    <div class="lg-hint">
+      Sessão válida por 30 dias neste navegador.<br>
+      A senha é definida em <b>PANEL_PASS</b> no arquivo <b>.env</b> do servidor.
+    </div>
+  </div>
+</div>
+<script>
+var attempts = 0;
+document.getElementById('lgForm').addEventListener('submit', async function (e) {
+  e.preventDefault();
+  var btn = document.getElementById('lgBtn'), err = document.getElementById('lgErr');
+  var pass = document.getElementById('lgPass').value;
+  if (!pass) { err.textContent = 'Digite a senha.'; return; }
+  btn.disabled = true; btn.textContent = 'Verificando...'; err.textContent = '';
+  try {
+    var r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pass }) });
+    var j = await r.json().catch(function () { return {}; });
+    if (r.ok && j.ok) {
+      var to = location.search.indexOf('next=') === 0 ? decodeURIComponent(location.search.replace('?next=', '')) : '/';
+      location.replace(to.startsWith('/') ? to : '/');
+      return;
+    }
+    attempts++;
+    err.textContent = j.error || 'Senha incorreta.';
+    if (attempts >= 3) btn.textContent = 'Entrar (' + attempts + ' tentativas)';
+    document.getElementById('lgPass').select();
+  } catch (_) {
+    err.textContent = 'Falha de rede. Tente de novo.';
+  } finally {
+    btn.disabled = false; btn.textContent = 'Entrar';
+  }
+});
+</script>
+</body>
+</html>

@@ -1,32 +1,102 @@
-# Born to Dream — Roblox Analytics
+# Born to Dream — Dashboard
 
-Dashboard inicial em tema laranja + preto para o grupo Vynz UGC (ID 190007685).
+Painel de analytics para grupo do Roblox (vendas em Robux, membros, saldo, produtos).
 
-## Segurança
-A chave da Roblox **não fica no frontend** e não deve ser enviada pelo chat.
-Ela é lida apenas pelo servidor através de `ROBLOX_API_KEY`.
+## O que foi instalado nesta atualização
 
-## Instalação
-1. Instale Node.js 18+.
-2. Copie `.env.example` para `.env`.
-3. Abra `.env` e substitua `COLE_SUA_CHAVE_AQUI` pela sua API Key.
-4. Rode:
-   `npm install`
-   `npm start`
-5. Abra `http://localhost:3000`.
+| Recurso | Onde |
+|---|---|
+| Login com senha + cookie assinado (HMAC) | `lib/guard.js`, `public/login.html` |
+| Rate limit por rota + global | `lib/guard.js` |
+| Cabeçalhos de segurança (CSP, HSTS, X-Frame) | `lib/guard.js` |
+| `/healthz` para monitorar uptime | `server.js` |
+| Exportar vendas em CSV | `/api/export/csv` |
+| Metas configuráveis na tela | aba **Assistente** → 🎯 Metas |
+| Backoff exponencial quando o Roblox recusa | `lib/backoff.js` + `/api/analytics` |
+| Persistência externa opcional (Upstash Redis) | `lib/store.js` |
+| Logs com nível + arquivo rotativo | `lib/logger.js` → `data/logs.jsonl` |
+| 404 JSON em rota de API inexistente | `server.js` |
 
-## O que já está pronto
-- Layout responsivo Born to Dream
-- Tema laranja/preto
-- Cards de métricas
-- Dados reais do grupo via Roblox Open Cloud Groups
-- Group ID configurado: 190007685
-- A API Key nunca é exposta ao navegador
-- Receita, vendas, ticket médio, ranking de produtos, gráficos e insights **não usam dados de demonstração**; ficam como "Não disponível" enquanto não houver autenticação compatível.
+## ⚡ Como atualizar (comando único)
 
-## Limitação atual da Roblox
-Os endpoints de transações e resumo de receita do grupo aparecem atualmente na documentação como autenticação por Cookie, enquanto os endpoints Open Cloud de Groups aceitam API Key/OAuth. Portanto, esta versão conecta com segurança os dados de grupo disponíveis pela chave e **não exibe números inventados para receita, vendas ou produtos**. Esses dados ficam como "Não disponível" até definirmos uma fonte de dados compatível.
+Abra o **CMD** dentro da pasta `Born_to_Dream_Roblox_Analytics_v25` e execute:
 
-Fontes oficiais:
-- https://create.roblox.com/docs/cloud/reference/features/groups
-- https://create.roblox.com/docs/pt-br/cloud/reference/domains/economy
+```
+ATUALIZAR.bat
+```
+
+Ele instala as dependências, completa o `.env` com as chaves novas, checa a
+sintaxe de todos os arquivos, cria as pastas que faltam e testa se o servidor sobe.
+
+Para rodar depois:
+
+```
+npm start
+```
+
+## 🔑 Configuração obrigatória (1 vez)
+
+Abra o arquivo `.env` e defina uma senha para o painel:
+
+```
+PANEL_PASS=sua_senha_aqui
+```
+
+Sem isso o painel fica aberto em produção. A tela de login aparece em `/login.html`
+e a sessão dura 30 dias no navegador.
+
+## 💾 Persistir os dados no Render (recomendado)
+
+O disco do Render é apagado em restart/deploy. Para os dados sobreviverem:
+
+1. Crie um banco grátis em https://console.upstash.com → **Redis** → **REST API**
+2. Copie `UPSTASH_REDIS_REST_URL` e `UPSTASH_REDIS_REST_TOKEN`
+3. Cole no `.env` (e nas variáveis de ambiente do Render):
+
+```
+KV_REST_API_URL=https://xxxxxx.upstash.io
+KV_REST_API_TOKEN=xxxxxxxxxxxxxxxx
+```
+
+Sem isso, o painel continua funcionando — só perde o snapshot salvo entre deploys.
+
+## 📊 Exportar planilha
+
+- Botão **⤓ Exportar CSV do período** na aba Assistente
+- Ou acesse `/api/export/csv?days=30` direto
+- Abre no Excel/Google Sheets com data, hora, item, comprador e valor
+
+## 🎯 Metas
+
+Aba **Assistente** → bloco **🎯 Metas**. Digite os valores separados por vírgula
+(ex.: `100,500,1000,5000`) e o período. A barra de progresso usa os últimos 30 dias
+e o confete dispara uma única vez por meta batida.
+
+## 🔒 Acesso por script/API
+
+Além do cookie, dá para autenticar por header:
+
+```
+curl -H "Authorization: Bearer SUA_SENHA" https://seu-painel/api/analytics?days=7
+```
+
+## 🩺 Monitorar uptime
+
+`/healthz` retorna status, uptime, uso do cache e se o cookie do Roblox está ok.
+Aponte o https://cron-job.org ou https://uptimerobot.com para ele.
+
+## 🪵 Logs
+
+`data/logs.jsonl` — últimas ~2500 linhas, com nível (`LOG_LEVEL=debug` para mais detalhe).
+
+## 🛡️ Rate limits
+
+| Rota | Limite |
+|---|---|
+| global | 300 req/min por IP |
+| `/api/login` | 12 tentativas / 5 min |
+| `/api/analytics` | 30 req/min |
+| `/api/chat` | 12 req/min |
+| `/api/members/search` | 30 req/min |
+| `/api/product/*` | 40 req/min |
+| `/api/pending` | 20 req/min |
