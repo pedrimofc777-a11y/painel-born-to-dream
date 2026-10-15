@@ -62,7 +62,10 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
   const say = (m, e) => console.log(`[discord-bot] ${m}`, e || "");
 
+  const slow2 = setTimeout(() => say("AINDA CONECTANDO apos 45s - o bot provavelmente nao esta no servidor ou o Guild ID esta errado"), 45000);
+  slow2.unref && slow2.unref();
   client.once(Events.ClientReady, async () => {
+    clearTimeout(slow2);
     say(`logado como ${client.user.tag}`);
     try {
       const rest = new REST({ version: "10" }).setToken(token);
@@ -238,8 +241,13 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
   function fmtN(n) { return Number(n || 0).toLocaleString("pt-BR"); }
 
   say("iniciando login...");
+  const tokLen = String(token || "").length;
+  say("token com " + tokLen + " caracteres");
+  // se em 20s nao conectar, avisa no log (token invalido/rede/防火墙)
+  const slow = setTimeout(() => say("AINDA CONECTANDO apos 20s - verifique o DISCORD_TOKEN e se o bot esta no servidor"), 20000);
+  slow.unref && slow.unref();
   client.login(token).then(
-    () => say("token aceito, aguardando conexao"),
-    (e) => say("LOGIN FALHOU: " + e.message)
+    () => { clearTimeout(slow); say("token aceito, aguardando conexao"); },
+    (e) => { clearTimeout(slow); say("LOGIN FALHOU: " + e.message + " (token com " + tokLen + " chars)"); }
   );
 };

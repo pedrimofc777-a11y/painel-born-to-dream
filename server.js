@@ -644,7 +644,26 @@ function once(key, fn) {
   inflight.set(key, p);
   return p;
 }
-const salesFor = (fromKey, pages) => once("sales:" + fromKey + ":" + pages, () => fetchSalesPages(pages, new Date(fromKey + "T00:00:00")));
+const FULL_TTL = 5 * 60 * 1000; // 5 min: a busca grande alimenta TUDO (analytics, pendente, produto)
+let fullSaleErr = null;
+/**
+ * Bus grande ÚNICA: 25 páginas de vendas, sem parar cedo.
+ * analytics, pendente e produto derivam dela. Uma requisição a cada 5 min
+ * em vez de 3 buscas separadas — é o que evitava o 429 no boot.
+ */
+function salesFull() {
+  return once("sales:full", () => fetchSalesPages(25, null));
+}
+/** busca grande com cache; devolve { txs } ou { error } */
+async function salesCached() {
+  const hit = cache.get("sales:full");
+  if (hit && Date.now() - hit.at < FULL_TTL) return hit.data;
+  const data = await salesFull();
+  cache.set("sales:full", { at: Date.now(), data });
+  if (data.error) fullSaleErr = data.error;
+  else fullSaleErr = null;
+  return data;
+}
 
 app.get("/api/analytics", async (req, res) => {
   if (!COOKIE_RAW) {
@@ -714,8 +733,7 @@ async function refreshAnalytics(akey, dayKeys, label) {
       };
     });
     const pages = 25;
-    const untilDate = new Date(dayKeys[0] + "T00:00:00");
-    const got = await salesFor(dayKeys[0], pages);
+    const got = await salesCached();
     if (got.error) {
       L.warn("falha ao buscar vendas", { status: got.error.status });
       partialFails.set(akey, fails + 1);
@@ -861,8 +879,8 @@ app.get("/api/pending", async (req, res) => {
   }
   try {
     const got = req.query.fresh
-      ? await fetchSalesPages(8)
-      : await salesFor("1990-01-01", 15);
+      ? await salesFull()
+      : await salesCached();
     if (got.error) {
       const saved = await store.read("pending", null);
       if (saved && saved.data) return res.json({ ...saved.data, stale: true, retryAfter: 60000 });
@@ -886,7 +904,7 @@ app.get("/api/pending", async (req, res) => {
 
 /** recalcula pendentes/previsão e guarda (usado pelo /api/pending em 2o plano e pelo boot) */
 async function refreshPending() {
-  const got = await salesFor("1990-01-01", 15);
+  const got = await salesCached();
   if (got.error) throw Object.assign(new Error("roblox indisponível"), { code: "ROBLOX" });
   return buildPending(got.txs);
 }
@@ -1248,24 +1266,26 @@ app.listen(PORT, () => {
   } else {
     L.warn("bot do Discord desligado", { temToken: tok, temCanal: ch });
   }
-  // aquece o cache em 2o plano: a 1a visita já cai no stale-while-revalidate
+  // UMA busca grande no boot alimenta analytics + pendente + produto.
+  // antes eram 3 buscas separadas (40+ requisições seguidas) e cavava 429 no Roblox.
   if (COOKIE_RAW) {
-    const warm = async (key, pages) => {
-      try {
-        const d = new Date(); d.setDate(d.getDate() - (key === "d90" ? 89 : key === "d30" ? 29 : 6));
-        const got = await salesFor(spDateKey(d), pages);
-        if (!got.error) {
-          cache.set("analytics:" + key, { at: Date.now(), data: { available: true, warm: true } });
-          L.info("cache aquecido", { range: key });
-        }
-      } catch {}
+    const boot = async () => {
+      const t0 = Date.now();
+      const got = await salesCached();
+      if (got.error) { L.warn("aquecendo: Roblox recusou", { status: got.error.status }); return; }
+      const n = got.txs.length;
+      try { await refreshPending(); L.info("pendentes calculados no boot", { ms: Date.now() - t0 }); }
+      catch (e) { L.warn("pendentes no boot falharam", { err: e.message }); }
+      L.info("cache aquecido", { vendas: n, ms: Date.now() - t0 });
+      // reaquecer depois que o Roblox respira (5 min = TTL do cache)
+      setInterval(async () => {
+        try {
+          const g = await salesCached();
+          if (!g.error) await refreshPending();
+        } catch {}
+      }, 5 * 60 * 1000);
     };
-    refreshPending().then(() => L.info("pendentes calculados no boot"))
-      .catch((e) => L.warn("pendentes no boot falharam", { err: e.message }));
-    setTimeout(() => warm("d7", 25), 2000);
-    setTimeout(() => warm("d30", 25), 45000);
-    setTimeout(() => refreshPending().catch(() => {}), 120000);
-    setInterval(() => refreshPending().catch(() => {}), 5 * 60 * 1000);
+    setTimeout(boot, 2500);
   }
   // avisos de venda no WhatsApp (CallMeBot)
   if (WA_PHONE.length && WA_APIKEY.length && COOKIE_RAW) {
