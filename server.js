@@ -48,25 +48,23 @@ async function waPoll() {
     const r = await economyFetch(url);
     const d = await readJson(r);
     if (!r.ok || !Array.isArray(d.data) || !d.data.length) return;
-    const snap = loadJsonFile(SNAP_FILE, {});
-    const lastSeen = snap.lastSaleId ? String(snap.lastSaleId) : null;
+    const lastSeen = await store.read("lastSaleId", null);
     const newOnes = [];
     for (const t of d.data.slice(0, 5)) {
-      if (lastSeen && String(t.id) === lastSeen) break;
+      if (lastSeen && String(t.id) === String(lastSeen)) break;
       newOnes.unshift(t);
     }
-    snap.lastSaleId = String(d.data[0].id);
-    saveJsonFile(SNAP_FILE, snap);
+    await store.write("lastSaleId", String(d.data[0].id));
     if (!lastSeen) return;
     for (const t of newOnes.slice(-3)) {
       const a = getAsset(t);
       const agent = t.agent || {};
       const when = new Date(t.created).toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit" });
-      const s = await sendWhats(`💰 VENDA NOVA\n${a.name} para ${agent.name || "?"} (${getRobux(t)})\n${when}`);
-      console.log(`[whats] venda ${a.name} -> ${s.ok ? "ok" : s.error}`);
+      const s = await sendWhats(`VENDA NOVA\n${a.name} para ${agent.name || "?"} (${getRobux(t)})\n${when}`);
+      L.info("whats venda", { item: a.name, ok: s.ok, err: s.error });
       await new Promise((rr) => setTimeout(rr, 5000));
     }
-  } catch (e) { console.log("[wa-poll]", e.message); }
+  } catch (e) { L.warn("wa-poll", { err: e.message }); }
 }
 async function askFreeAI(message, ctx) {
   // Pollinations: IA gratuita, sem chave (https://pollinations.ai)
@@ -644,12 +642,13 @@ function once(key, fn) {
   inflight.set(key, p);
   return p;
 }
-const FULL_TTL = 5 * 60 * 1000; // 5 min: a busca grande alimenta TUDO (analytics, pendente, produto)
+const FULL_TTL = 60 * 1000; // 60s: mesmo ritmo de 1 minuto que funcionava antes
 let fullSaleErr = null;
 /**
  * Bus grande ÚNICA: 25 páginas de vendas, sem parar cedo.
- * analytics, pendente e produto derivam dela. Uma requisição a cada 5 min
- * em vez de 3 buscas separadas — é o que evitava o 429 no boot.
+ * analytics, pendente e produto derivam dela — evita as 3 buscas separadas
+ * que cavavam 429. Mas o TTL é de 60s: o painel atualiza a cada 1 minuto,
+ * que é o tempo que o Roblox aguenta sem limitar.
  */
 function salesFull() {
   return once("sales:full", () => fetchSalesPages(25, null));
@@ -695,12 +694,12 @@ app.get("/api/analytics", async (req, res) => {
   const hitA = cache.get(akey);
   if (hitA && Date.now() - hitA.at < attl) return res.json({ ...hitA.data, cached: true });
 
-  /* ── STALE-WHILE-REVALIDATE ──
-     se já temos algum dado (memória, disco ou KV), devolve NA HORA marcado como
-     stale e atualiza por trás. Assim a tela nunca fica travada esperando o Roblox. */
+  /* dado velho só é servido na hora se tiver menos de 3 min — depois disso
+     espera o fresco (é o que dá a sensação de "carregando aos poucos"). */
   const staleObj = hitA ? hitA.data : (await store.read(akey, null));
-  if (staleObj && staleObj.available && !staleObj.partial) {
-    cache.set(akey, { at: Date.now(), data: staleObj }); // evita reconsultar o KV a cada request
+  const staleAge = staleObj && staleObj.savedAt ? Date.now() - new Date(staleObj.savedAt).getTime() : Infinity;
+  if (staleObj && staleObj.available && !staleObj.partial && staleAge < 3 * 60 * 1000) {
+    cache.set(akey, { at: Date.now(), data: staleObj });
     res.json({ ...staleObj, stale: true });
     refreshAnalytics(akey, dayKeys, label).catch(() => {});
     return;
@@ -868,12 +867,12 @@ app.get("/api/latest", async (_req, res) => {
 // Robux a liberar (hold de ~30 dias): agrupa por DATA DE LIBERAÇÃO
 // venda do dia 10 -> cai no dia 10 do mes seguinte. Mostra o pendente mais proximo.
 app.get("/api/pending", async (req, res) => {
-  // 1) devolve o que tem (KV/disco) na hora, sem esperar o Roblox
+  // só devolve salvo na hora se tiver menos de 3 min (senão espera o fresco,
+  // que é o ritmo de 1 minuto que o Roblox aguenta)
   if (!req.query.fresh) {
     const saved = await store.read("pending", null);
-    if (saved && saved.data && Date.now() - (saved.at || 0) < 10 * 60 * 1000) {
+    if (saved && saved.data && saved.data.savedAt && Date.now() - new Date(saved.data.savedAt).getTime() < 3 * 60 * 1000) {
       res.json(saved.data);
-      refreshPending().catch(() => {});
       return;
     }
   }
@@ -1290,8 +1289,8 @@ app.listen(PORT, () => {
   // avisos de venda no WhatsApp (CallMeBot)
   if (WA_PHONE.length && WA_APIKEY.length && COOKIE_RAW) {
     L.info(`WhatsApp: ok (${WA_PHONE.length} número(s))`);
-    setTimeout(waPoll, 150000);
-    setInterval(waPoll, 180 * 1000);
+    setTimeout(waPoll, 60000);
+    setInterval(waPoll, 60 * 1000); // 1 minuto: pega a venda rapido sem martelar
   } else {
     console.log("WhatsApp: desligado (WA_PHONE/WA_APIKEY)");
   }

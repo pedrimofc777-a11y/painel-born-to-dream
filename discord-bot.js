@@ -78,9 +78,9 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
         say("comandos globais registrados (podem demorar ate 1h)");
       }
     } catch (e) { say("comandos: " + e.message); }
-    say("vigia de vendas ligado (2 min)");
-    setTimeout(poll, 45000);
-    setInterval(poll, 120 * 1000);
+    say("vigia de vendas ligado (1 min)");
+    setTimeout(poll, 30000);
+    setInterval(poll, 60 * 1000);
   });
 
   // diagnostico: qualquer problema de conexao aparece no log
