@@ -66,6 +66,7 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
   slow2.unref && slow2.unref();
   client.once(Events.ClientReady, async () => {
     clearTimeout(slow2);
+    tentativas = 0;
     say(`logado como ${client.user.tag}`);
     try {
       const rest = new REST({ version: "10" }).setToken(token);
@@ -243,11 +244,27 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
   say("iniciando login...");
   const tokLen = String(token || "").length;
   say("token com " + tokLen + " caracteres");
-  // se em 20s nao conectar, avisa no log (token invalido/rede/防火墙)
-  const slow = setTimeout(() => say("AINDA CONECTANDO apos 20s - verifique o DISCORD_TOKEN e se o bot esta no servidor"), 20000);
-  slow.unref && slow.unref();
-  client.login(token).then(
-    () => { clearTimeout(slow); say("token aceito, aguardando conexao"); },
-    (e) => { clearTimeout(slow); say("LOGIN FALHOU: " + e.message + " (token com " + tokLen + " chars)"); }
-  );
+  if (token.split(".").length !== 3) say("AVISO: token nao tem formato de bot (3 partes). Confira se copiou o Client Secret por engano.");
+
+  let tentativas = 0;
+  const MAX = 5;
+  const entrar = () => {
+    tentativas++;
+    const t20 = setTimeout(() => {
+      if (client.isReady && client.isReady()) return;
+      say("tentativa " + tentativas + " nao conectou - destruindo e tentando de novo" + (tentativas < MAX ? " (15s)" : " (desistindo)"));
+      try { client.destroy(); } catch {}
+      if (tentativas < MAX) setTimeout(entrar, 15000);
+    }, 20000);
+    t20.unref && t20.unref();
+    client.login(token).then(
+      () => say("token aceito, aguardando conexao"),
+      (e) => {
+        clearTimeout(t20);
+        say("LOGIN FALHOU: " + e.message + " (token com " + tokLen + " chars)");
+        if (tentativas < MAX) setTimeout(entrar, 20000);
+      }
+    );
+  };
+  entrar();
 };
