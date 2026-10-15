@@ -13,6 +13,15 @@
 <link rel="stylesheet" href="/styles.css">
 <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <script src="https://cdn.jsdelivr.net/npm/canvas-confetti@1.9.3/dist/confetti.browser.min.js"></script>
+<script>
+/* service worker: painel abre offline com os ultimos dados */
+if("serviceWorker" in navigator){
+  addEventListener("load",()=>navigator.serviceWorker.register("/sw.js").catch(()=>{}));
+}
+/* aviso quando cair a internet */
+addEventListener("offline",()=>typeof MB_toast==="function"&&MB_toast("Sem internet — mostrando os ultimos dados salvos"));
+addEventListener("online",()=>{ typeof MB_toast==="function"&&MB_toast("Internet voltou — atualizando"); loadAll(true); });
+</script>
 <style>
 #decor{position:fixed;top:0;left:0;right:0;bottom:0;pointer-events:none;z-index:5;overflow:hidden}
 #decor span{position:absolute;top:-50px;font-size:24px;opacity:.35;animation:fall linear infinite}
@@ -266,11 +275,38 @@ function mbSkeleton(on){
     else if(el.dataset.real!==undefined){ el.classList.remove("loading"); el.textContent=el.dataset.real; delete el.dataset.real; }
   });
 }
+// pendente / previsao com a data real de liberacao
+async function mbPending(){
+  const box=$("k-pend");
+  try{
+    const p=await(await api("/api/pending")).json();
+    if(p.error) throw new Error(p.error);
+    const tot=p.pendingRobux??p.totalPending??0;
+    if(box) box.textContent=fmt(tot);
+    const em=box&&box.parentElement?box.parentElement.querySelector("em"):null;
+    if(em) em.textContent=`${p.pendingCount||0} vendas • a liberar`;
+    const tom=$("k-tom"), ts=$("k-tom-s");
+    if(tom) tom.textContent=fmt(p.proximo?p.proximo.robux:(p.oldestRobux||0));
+    if(ts) ts.textContent=p.proximo
+      ? `cai em ${p.proximo.date}${p.proximo.emDias!=null?` (${p.proximo.emDias}d)`:""}`
+      : (p.oldestDate?`libera em ${p.oldestDate}`:"nada pendente");
+  }catch(e){
+    if(box) box.textContent="—";
+    const ts=$("k-tom-s"); if(ts) ts.textContent="indisponível";
+  }
+}
 // baixar CSV do filtro atual
 function exportCsv(){
   const q=CUSTOM?`start=${CUSTOM.start}&end=${CUSTOM.end}`:`days=${DAYS}`;
   location.href="/api/export/csv?"+q;
   MB_toast("Gerando planilha...");
+}
+// registra o acesso (manda IP pro Discord)
+function mbLogAccess(){
+  try{
+    fetch("/api/access-log",{method:"POST",headers:{"Content-Type":"application/json"},
+      body:JSON.stringify({page:location.pathname+location.search})}).catch(()=>{});
+  }catch{}
 }
 window.mbToggleGoalForm=()=>{
   const f=$("goalForm");
@@ -301,12 +337,11 @@ const btn=document.querySelector(`#nav .nav[data-tab="${tab}"]`);
 if(btn) btn.click(); else { document.querySelectorAll(".view").forEach(v=>v.classList.remove("active")); $("view-"+tab).classList.add("active"); }
 }
 function setRange(days, date){
-if(window._loading) return;
 if(date){ CUSTOM={start:date,end:date}; } else { DAYS=days; CUSTOM=null; }
 document.querySelectorAll("[data-pdays]").forEach(x=>x.classList.toggle("active",!date&&parseInt(x.dataset.pdays,10)===DAYS));
 document.querySelectorAll("[data-pdate]").forEach(x=>{ if(!date) x.value=""; });
-document.querySelectorAll("[data-pdays],[data-pgo]").forEach(x=>{ x.disabled=true; x.style.opacity=".5"; });
-ALL_MODE=false; loadAnalytics().finally(()=>document.querySelectorAll("[data-pdays],[data-pgo]").forEach(x=>{ x.disabled=false; x.style.opacity=""; }));
+ALL_MODE=false;
+loadAnalytics();
 }
 document.querySelectorAll("[data-pdays]").forEach(b=>b.onclick=()=>setRange(parseInt(b.dataset.pdays,10),null));
 document.querySelectorAll("[data-pgo]").forEach(b=>b.onclick=()=>{ const inp=b.parentElement.querySelector("[data-pdate]"); if(inp&&inp.value) setRange(null,inp.value); });
@@ -469,15 +504,7 @@ loadRoles(); loadBalance();
 async function loadBalance(force){
 try{ const b=await (await api("/api/balance")).json(); $("k-disp").textContent=fmt(b.disponivel??0); }
 catch{ $("k-disp").textContent="—"; }
-try{
-const p=await (await api("/api/pending"+(force?"?fresh=1":""))).json();
-const items=p.items||[];
-const live=items.reduce((s,i)=>s+(i.robux||0),0);
-$("k-pend").textContent=fmt(items.length?live:(p.totalPending??p.pendingRobux??0));
-const em=$("k-pend").parentElement.querySelector("em"); if(em) em.textContent=`${items.length||p.pendingCount||0} vendas • a liberar`;
-$("k-tom").textContent=fmt(p.oldestRobux??0);
-$("k-tom-s").textContent="cai em "+(p.oldestDate||"—");
-}catch{ $("k-tom").textContent="—"; }
+await mbPending();
 }
 
 async function loadAnalytics(){
@@ -498,6 +525,7 @@ if(a.partial||a.sales==null||a.stale){
   const wait=Math.max(15000,(a.retryAfter||Math.min(15000*Math.pow(2,window._fails-1),300000)));
   window._retryT=setTimeout(()=>{ if(isLeader()) loadAnalytics(); },wait);
 }
+if(a.offline){ $("status").textContent="⚠ Sem internet — mostrando os últimos dados salvos"; }
 if(!a.partial&&a.sales!=null) window._fails=0;
 const prevFirst=LAST_TX;
 const isNew=prevFirst&&a.transactions.length&&a.transactions[0].id!==prevFirst;
@@ -578,12 +606,18 @@ if(kind==="disp"){
 const last=(DATA?.transactions||[]).slice(0,10);
 B.innerHTML=`<p class="msg"><b style="color:#fff;font-size:20px">${$("k-disp").textContent}</b> disponíveis no grupo</p><h4>Últimas compras</h4>`+(last.length?tbl(last):"<p class='msg'>—</p>")+`<p class="msg">O Roblox libera em ~30 dias após cada venda.</p>`;
 }else if(kind==="pend"){
-const items=p.items||[];
-B.innerHTML=`<p class="msg"><b style="color:#fff;font-size:20px">${$("k-pend").textContent}</b> pendentes em ${items.length} vendas${p.stale?" • ⚠ salvos":""}</p><div style="max-height:340px;overflow:auto"><table class="datatable"><tr><th>Item</th><th>Libera em</th><th style="text-align:right">Valor</th></tr>${items.slice(0,500).map(i=>`<tr><td>${i.assetName}</td><td>${i.release}</td><td style="text-align:right">${fmt(i.robux)}</td></tr>`).join("")}</table></div><p class="msg">Mostrando ${Math.min(items.length,500)} de ${items.length}.</p>`;
+const tot=p.pendingRobux??p.totalPending??0;
+const rows=(p.porData||p.upcoming||[]);
+B.innerHTML=`<p class="msg"><b style="color:#fff;font-size:20px">${fmt(tot)}</b> pendentes em ${p.pendingCount||0} vendas${p.stale?" • ⚠ dados salvos":""}</p>
+${p.proximo?`<p class="msg">Próximo a cair: <b style="color:hsl(var(--orange))">${p.proximo.date}</b> — ${fmt(p.proximo.robux)}${p.proximo.emDias!=null?` <span class="tag b">em ${p.proximo.emDias} dias</span>`:""}</p>`:`<p class="msg">Nada pendente agora.</p>`}
+${p.atrasado?`<p class="msg err">Atrasado: ${p.atrasado.date} — ${fmt(p.atrasado.robux)}</p>`:""}
+<div style="max-height:300px;overflow:auto"><table class="datatable"><tr><th>Cai em</th><th style="text-align:right">Valor</th></tr>${rows.map(u=>`<tr${u.date===p.proximo?.date?` style="background:rgba(255,122,0,.12)"`:""}><td>${u.date}${u.futuro===false?" <small>(atrasado)</small>":u.date===p.proximo?.date?" ◀ próxima":""}</td><td style="text-align:right">${fmt(u.robux)}</td></tr>`).join("")}</table></div>`;
 }else{
-const up=p.upcoming||[];
-const tot=up.reduce((s,u)=>s+u.robux,0);
-B.innerHTML=`<p class="msg">Total previsto: <b style="color:#fff;font-size:18px">${fmt(p.totalPending??tot)}</b> (libera até ${p.lastDate||"—"}, ±1 mês)</p><div style="max-height:340px;overflow:auto"><table class="datatable"><tr><th>Cai em</th><th style="text-align:right">Valor</th></tr>${up.map((u,i)=>`<tr${i===0?` style="background:rgba(255,122,0,.12)"`:""}><td>${u.date}${i===0?" ◀ próxima":""}</td><td style="text-align:right">${fmt(u.robux)}</td></tr>`).join("")}</table></div>`;
+const tot=p.totalPending??0;
+const rows=(p.porData||[]);
+B.innerHTML=`<p class="msg">Total a liberar: <b style="color:#fff;font-size:18px">${fmt(tot)}</b> • o Roblox paga ~30 dias depois de cada venda</p>
+${p.proximo?`<p class="msg">Próxima: <b style="color:hsl(var(--orange))">${p.proximo.date}</b> — ${fmt(p.proximo.robux)}${p.proximo.emDias!=null?` (faltam ${p.proximo.emDias} dias)`:""}</p>`:""}
+<div style="max-height:300px;overflow:auto"><table class="datatable"><tr><th>Cai em</th><th style="text-align:right">Valor</th></tr>${rows.map(u=>`<tr><td>${u.date}</td><td style="text-align:right">${fmt(u.robux)}</td></tr>`).join("")}</table></div>`;
 }
 }catch{ B.innerHTML="<p class='msg err'>Não consegui carregar. Tente de novo.</p>"; }
 }
@@ -785,7 +819,7 @@ const shown=list.slice(0,500);
 $("memList").innerHTML=list.length?`<table class="datatable"><tr><th>ID</th><th>Usuário</th><th>Nome</th><th style="text-align:right">Perfil</th></tr>${shown.map(m=>`<tr><td>${m.userId}</td><td><a href="#" onclick="showProfile('${m.username}');return false">@${m.username}</a></td><td><a href="#" onclick="showProfile('${m.username}');return false" style="color:#fff">${m.displayName}</a></td><td style="text-align:right"><a href="https://www.roblox.com/users/${m.userId}/profile" target="_blank">Abrir</a></td></tr>`).join("")}</table><p class="msg">${fmt(shown.length)} de ${fmt(list.length)} (filtrados de ${fmt(memLoaded.length)} carregados). Clique num nome para ver o perfil.</p>`:"<p class='msg'>Digite acima para buscar qualquer pessoa do grupo.</p>";
 }
 
-async function loadAll(){ if(!(await brGate())) return; applyTheme(); checkMetaSoon(); await loadGroup(); await loadAnalytics(); loadTodosPreview(); loadDaily(); loadChatHistory(); loadGoals(); }
+async function loadAll(){ if(!(await brGate())) return; applyTheme(); checkMetaSoon(); await loadGroup(); await loadAnalytics(); loadTodosPreview(); loadDaily(); loadChatHistory(); loadGoals(); mbLogAccess(); }
 if("serviceWorker" in navigator){ window.addEventListener("load",()=>{ try{ navigator.serviceWorker.register("/sw.js"); }catch{} }); }
 loadAll();
 setInterval(async()=>{ // vigia rápido: confere venda nova e atualiza na hora

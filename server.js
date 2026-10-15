@@ -99,6 +99,7 @@ app.use("/api/members/search", guard.rateLimiter({ windowMs: 60000, max: 30, key
 app.use("/api/user/lookup", guard.rateLimiter({ windowMs: 60000, max: 40, key: "lookup" }));
 app.use("/api/product", guard.rateLimiter({ windowMs: 60000, max: 40, key: "product" }));
 app.use("/api/pending", guard.rateLimiter({ windowMs: 60000, max: 20, key: "pending" }));
+app.use("/api/access-log", guard.rateLimiter({ windowMs: 60000, max: 10, key: "accesslog" }));
 // autenticação: tudo /api/* fechado, exceto whitelist
 app.use(guard.authGate);
 
@@ -174,9 +175,11 @@ function buildCookieHeader() {
 let csrfCache = "";
 // fila única: 1 chamada autenticada por vez, com respiro (IP compartilhado sofre 429)
 let ecoChain = Promise.resolve();
+let ecoGap = 1200; // ajusta sozinho: sobe quando o Roblox reclama, desce quando tá calmo
+let eco429 = 0;
 function economyFetch(url, opts = {}) {
   const p = ecoChain.then(() => economyFetchInner(url, opts));
-  ecoChain = p.catch(() => {}).then(() => new Promise((r) => setTimeout(r, 1200)));
+  ecoChain = p.catch(() => {}).then(() => new Promise((r) => setTimeout(r, ecoGap)));
   return p;
 }
 async function economyFetchInner(url, opts = {}) {
@@ -198,10 +201,15 @@ async function economyFetchInner(url, opts = {}) {
   };
   let res = await doFetch(csrfCache);
   if (res.status === 429) {
+    eco429++;
+    ecoGap = Math.min(ecoGap * 1.5, 6000); // desacelera a fila inteira
     const wait = Math.min((parseFloat(res.headers.get("retry-after") || "5") || 5) * 1000, 30000);
-    console.log("[economy] 429, aguardando", wait, "ms:", url.slice(0, 90));
+    L.warn("429 do Roblox — desacelerando", { gapMs: Math.round(ecoGap), wait });
     await new Promise((r) => setTimeout(r, wait));
     res = await doFetch(csrfCache);
+  } else if (eco429 > 0) {
+    eco429--;
+    if (eco429 === 0) ecoGap = Math.max(1200, ecoGap * 0.85); // volta a acelerar devagar
   }
   if (res.status === 403) {
     const newToken = res.headers.get("x-csrf-token");
@@ -806,58 +814,91 @@ app.get("/api/latest", async (_req, res) => {
     return res.status(500).json({ error: "Falha interna." });
   }
 });
-// Robux a liberar (hold de ~30 dias): soma pendentes por data de liberação
+// Robux a liberar (hold de ~30 dias): agrupa por DATA DE LIBERAÇÃO
+// venda do dia 10 -> cai no dia 10 do mes seguinte. Mostra o pendente mais proximo.
 app.get("/api/pending", async (req, res) => {
   try {
     const got = req.query.fresh
       ? await fetchSalesPages(8)
       : await cached("sales:10", 300000, () => fetchSalesPages(15));
     if (got.error) {
-      const saved = loadDiskCache().pending;
-      if (saved) return res.json({ ...saved.data, stale: true });
-      return res.status(503).json({ error: "Dados indisponíveis." });
+      const saved = await store.read("pending", null);
+      if (saved && saved.data) return res.json({ ...saved.data, stale: true, retryAfter: 60000 });
+      return res.status(503).json({ error: "Dados indisponíveis agora (limite do Roblox).", retryAfter: 60000 });
     }
+    const now = new Date();
     const rel = {};
-    let pendingCount = 0;
-    for (const t of got.txs) {
-      if (!t.isPending) continue;
-      pendingCount++;
-      const created = new Date(t.created);
-      const release = new Date(created.getTime() + 30 * 86400000);
-      const k = spDateKey(release);
-      rel[k] = (rel[k] || 0) + getRobux(t);
-    }
-    const today = spDateKey(new Date());
-    // "cai amanhã": data de liberação da venda pendente mais antiga
-    const sorted = Object.entries(rel).sort((a, b) => a[0].localeCompare(b[0]));
-    const first = sorted[0] || null;
-    const upcoming = sorted
-      .filter(([k]) => k >= today)
-      .slice(0, 7)
-      .map(([date, robux]) => ({ date, robux }));
+    let pendingCount = 0, pendingRobux = 0;
     const pendList = [];
     for (const t of got.txs) {
       if (!t.isPending) continue;
-      const a = getAsset(t);
+      pendingCount++;
+      const robux = getRobux(t);
+      pendingRobux += robux;
       const created = new Date(t.created);
       const release = new Date(created.getTime() + 30 * 86400000);
-      pendList.push({ created: spDateKey(created), release: spDateKey(release), assetName: a.name, assetId: a.id, robux: getRobux(t) });
+      const k = spDateKey(release);
+      rel[k] = (rel[k] || 0) + robux;
+      pendList.push({ created: spDateKey(created), release: k, assetName: getAsset(t).name, assetId: getAsset(t).id, robux });
     }
-    pendList.sort((a, b) => a.release.localeCompare(b.release));
+    const today = spDateKey(now);
+    const future = Object.entries(rel).filter(([k]) => k >= today).sort((a, b) => a[0].localeCompare(b[0]));
+    const past = Object.entries(rel).filter(([k]) => k < today).sort((a, b) => b[0].localeCompare(a[0]));
+
+    // proximo a cair: o mais proximo de hoje (futuro primeiro, senao o atrasado)
+    const proximo = future[0] || past[0] || null;
+    const daysTo = proximo ? Math.round((new Date(proximo[0] + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000) : null;
+
+    const upcoming = future.slice(0, 8).map(([date, robux]) => ({ date, robux }));
     const out = {
-      oldestDate: first ? first[0] : null,
-      oldestRobux: first ? first[1] : 0,
-      upcoming, pendingCount,
-      totalPending: Object.values(rel).reduce((s, v) => s + v, 0),
-      lastDate: sorted.length ? sorted[sorted.length - 1][0] : null,
-      pendingRobux: upcoming.reduce((s, u) => s + u.robux, 0),
+      // compativel com o front antigo
+      oldestDate: proximo ? proximo[0] : null,
+      oldestRobux: proximo ? proximo[1] : 0,
+      upcoming, pendingCount, totalPending: pendingRobux, pendingRobux,
+      lastDate: future.length ? future[future.length - 1][0] : (past.length ? past[0][0] : null),
+      // novos campos
+      proximo: proximo ? { date: proximo[0], robux: proximo[1], emDias: daysTo } : null,
+      atrasado: past.length ? { date: past[0][0], robux: past[0][1] } : null,
+      porData: [...future.slice(0, 12), ...past.slice(0, 4)].map(([date, robux]) => ({ date, robux, futuro: date >= today })),
       items: pendList,
       savedAt: new Date().toISOString(),
     };
-    saveDiskCache({ pending: { at: Date.now(), data: out } });
+    await store.write("pending", { at: Date.now(), data: out });
     return res.json(out);
-  } catch {
+  } catch (e) {
+    if (e && e.code === "NO_COOKIE") {
+      const saved = await store.read("pending", null);
+      if (saved && saved.data) return res.json({ ...saved.data, stale: true, noCookie: true });
+      return res.status(503).json({ error: "Cookie do Roblox não configurado no servidor.", noCookie: true });
+    }
+    L.warn("pending falhou", { err: e && e.message });
+    const saved = await store.read("pending", null);
+    if (saved && saved.data) return res.json({ ...saved.data, stale: true });
     return res.status(500).json({ error: "Falha interna." });
+  }
+});
+
+/* ── log de acesso (lista pro comando /ips) ── */
+app.get("/api/access-log", async (req, res) => {
+  const log = await store.read("accessLog", []);
+  res.json({ items: log.slice(0, 30) });
+});
+
+/* ── log de acesso (avisa no Discord quando alguem entra no painel) ── */
+app.post("/api/access-log", async (req, res) => {
+  const ip = String(req.headers["x-forwarded-for"] || req.socket.remoteAddress || "?").split(",")[0].trim();
+  const ua = String(req.headers["user-agent"] || "?").slice(0, 180);
+  const page = String((req.body || {}).page || "/").slice(0, 60);
+  const when = new Date().toLocaleString("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", hour: "2-digit", minute: "2-digit", second: "2-digit" });
+  res.json({ ok: true });
+  L.info("acesso ao painel", { ip, page });
+  try {
+    const log = await store.read("accessLog", []);
+    log.unshift({ ip, ua, page, when });
+    await store.write("accessLog", log.slice(0, 200));
+  } catch {}
+  if (global.__btdNotifyAccess) {
+    setTimeout(() => { try { global.__btdNotifyAccess({ ip, ua, page, when }); } catch {} }, 300);
   }
 });
 

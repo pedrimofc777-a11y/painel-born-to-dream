@@ -1,7 +1,7 @@
-// Bot do Discord: comandos + aviso de venda. Roda no mesmo processo do painel.
+// Bot do Discord: comandos + aviso de venda + aviso de acesso. Roda no mesmo processo.
 const fs = require("fs");
 const path = require("path");
-const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder } = require("discord.js");
+const { Client, GatewayIntentBits, REST, Routes, EmbedBuilder, Events } = require("discord.js");
 
 const DATA = path.join(__dirname, "data");
 const STATE = path.join(DATA, "bot.json");
@@ -15,11 +15,12 @@ const COMMANDS = [
   { name: "pendentes", description: "Próximas liberações" },
   { name: "ranking", description: "Top produtos (30 dias)" },
   { name: "membros", description: "Membros e dono" },
-  { name: "previsao", description: "Próximas liberações" },
+  { name: "previsao", description: "Previsão de robux a cair" },
   { name: "ticket", description: "Ticket médio (30 dias)" },
   { name: "compradores", description: "Top compradores (30 dias)" },
   { name: "resumo", description: "Resumo geral do grupo" },
   { name: "ajuda", description: "Lista de comandos" },
+  { name: "ips", description: "Últimos acessos ao painel" },
   {
     name: "vendas", description: "Resumo do período",
     options: [{ name: "dias", description: "Dias (1-90)", type: 4, required: false, min_value: 1, max_value: 90 }],
@@ -40,39 +41,63 @@ async function thumb(assetId) {
 }
 
 function saleEmbed(t, todayCount, img) {
-  const e = new EmbedBuilder().setColor(0xff7a00).setTitle("🆕 VENDA NOVA").setTimestamp(new Date(t.created))
+  const e = new EmbedBuilder().setColor(0xff7a00).setTitle("\u{1F195} VENDA NOVA").setTimestamp(new Date(t.created))
     .setFooter({ text: "Born to Dream • Roblox Analytics" });
   e.addFields(
-    { name: "📦 Item", value: t.assetId ? `[${t.assetName}](https://www.roblox.com/catalog/${t.assetId}/x)` : (t.assetName || "?"), inline: true },
-    { name: "🙋 Comprador", value: t.buyerId ? `[${t.buyerName}](https://www.roblox.com/users/${t.buyerId}/profile)` : (t.buyerName || "?"), inline: true },
-    { name: "💰 Valor", value: `${t.robux}`, inline: true },
+    { name: "\u{1F4E6} Item", value: t.assetId ? `[${t.assetName}](https://www.roblox.com/catalog/${t.assetId}/x)` : (t.assetName || "?"), inline: true },
+    { name: "\u{1F64B} Comprador", value: t.buyerId ? `[${t.buyerName}](https://www.roblox.com/users/${t.buyerId}/profile)` : (t.buyerName || "?"), inline: true },
+    { name: "\u{1F4B0} Valor", value: `${t.robux}`, inline: true },
   );
-  if (todayCount != null) e.addFields({ name: "📊 Hoje", value: `${todayCount} vendas`, inline: true });
+  if (todayCount != null) e.addFields({ name: "\u{1F4CA} Hoje", value: `${todayCount} vendas`, inline: true });
   if (img) e.setThumbnail(img);
   return e;
 }
 
 module.exports = function startBot({ port, token, channelId, guildId }) {
   const api = async (p) => {
-    const r = await fetch(`http://localhost:${port}${p}`);
+    const r = await fetch(`http://127.0.0.1:${port}${p}`, { headers: { "x-bot": "1" } });
     return r.json();
   };
+
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
 
-  client.once("clientReady", async () => {
+  client.once(Events.ClientReady, async () => {
     console.log(`[discord-bot] logado como ${client.user.tag}`);
     try {
       const rest = new REST({ version: "10" }).setToken(token);
       if (guildId) {
         await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: COMMANDS });
+        console.log("[discord-bot] comandos registrados no servidor");
       } else {
         await rest.put(Routes.applicationCommands(client.user.id), { body: COMMANDS });
         console.log("[discord-bot] comandos globais (podem demorar até 1h)");
       }
     } catch (e) { console.log("[discord-bot] comandos:", e.message); }
-    setTimeout(poll, 150000);
-    setInterval(poll, 180 * 1000);
+    setTimeout(poll, 60000);
+    setInterval(poll, 120 * 1000);
   });
+
+  client.on(Events.Error, (e) => console.log("[discord-bot] erro:", e.message));
+  process.on("unhandledRejection", (e) => console.log("[discord-bot] rejeição:", (e && e.message) || e));
+
+  /** avisa no canal que alguem entrou no painel */
+  async function notifyAccess({ ip, ua, page, when }) {
+    if (!channelId) return;
+    try {
+      const ch = await client.channels.fetch(channelId).catch(() => null);
+      if (!ch || !ch.isTextBased()) return;
+      const em = new EmbedBuilder().setColor(0x3ba55d).setTitle("\u{1F510} ACESSO AO PAINEL").setTimestamp(new Date())
+        .setFooter({ text: "Born to Dream • Roblox Analytics" })
+        .addFields(
+          { name: "\u{1F5A5} IP", value: `\`${ip}\``, inline: true },
+          { name: "\u{1F4C4} Página", value: `\`${page}\``, inline: true },
+          { name: "\u{1F552} Quando", value: when, inline: true },
+          { name: "\u{1F4F1} Dispositivo", value: (ua || "?").slice(0, 180), inline: false },
+        );
+      await ch.send({ content: "@everyone", embeds: [em] });
+    } catch {}
+  }
+  global.__btdNotifyAccess = notifyAccess;
 
   async function poll() {
     try {
@@ -80,27 +105,27 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       const ch = await client.channels.fetch(channelId).catch(() => null);
       if (!ch || !ch.isTextBased()) return;
       const a = await api("/api/analytics?days=1");
-      if (!a.transactions || !a.transactions.length) return;
+      if (!a || !a.transactions || !a.transactions.length) return;
       const st = load();
-      if (!st.last) { st.last = String(a.transactions[0].id); save(st); return; } // 1ª leitura: só marca
+      if (!st.last) { st.last = String(a.transactions[0].id); save(st); return; }
       const fresh = a.transactions.filter((t) => Number(t.id) > Number(st.last)).reverse().slice(-3);
       st.last = String(a.transactions[0].id);
       save(st);
       for (const t of fresh) {
-        await ch.send({ content: "||@everyone||", embeds: [saleEmbed(t, a.todayCount, await thumb(t.assetId))] });
+        await ch.send({ content: "@everyone", embeds: [saleEmbed(t, a.todayCount, await thumb(t.assetId))] });
       }
       if (fresh.length) console.log(`[discord-bot] ${fresh.length} venda(s) avisada(s)`);
     } catch (e) { console.log("[discord-bot] poll:", e.message); }
   }
 
-  client.on("interactionCreate", async (it) => {
+  client.on(Events.InteractionCreate, async (it) => {
     if (it.isAutocomplete()) {
       try {
         if (it.commandName === "produto") {
           const q = (it.options.getFocused() || "").toLowerCase();
           const a = await api("/api/analytics?days=30");
           const list = (a.ranking || []).filter((r) => (r.name || "").toLowerCase().includes(q)).slice(0, 25);
-          await it.respond(list.map((r) => ({ name: String(r.name).slice(0, 100), value: String(r.assetId || r.name).slice(0, 100) })));
+          await it.respond(list.map((r) => ({ name: String(r.name).slice(0, 100), value: String(r.assetId || r.name).slice(0, 100) })).slice(0, 24));
         } else { await it.respond([]); }
       } catch { try { await it.respond([]); } catch {} }
       return;
@@ -124,10 +149,11 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       } else if (n === "saldo") {
         const b = await api("/api/balance");
         const p = await api("/api/pending");
-        await it.editReply(`**Disponível:** ${b.disponivel ?? "?"} • **Pendente:** ${b.pendente ?? "?"} • Cai em: ${p.oldestDate || "?"} (${p.oldestRobux ?? "?"})`);
+        const saida = p.proximo ? `${p.proximo.date} (${p.proximo.robux}${p.proximo.emDias != null ? `, em ${p.proximo.emDias}d` : ""})` : "—";
+        await it.editReply(`**Disponível:** ${b.disponivel ?? "?"} • **Pendente:** ${fmtN(p.pendingRobux ?? p.totalPending ?? "?")}\n**Próximo a cair:** ${saida}`);
       } else if (n === "pendentes") {
         const p = await api("/api/pending");
-        const lines = (p.upcoming || []).slice(0, 7).map((u) => `${u.date}: **${u.robux}**`).join("\n") || "—";
+        const lines = (p.porData || p.upcoming || []).slice(0, 7).map((u) => `${u.date}: **${fmtN(u.robux)}**`).join("\n") || "—";
         await it.editReply(`**Liberações:**\n${lines}`);
       } else if (n === "ranking") {
         const a = await api("/api/analytics?days=30");
@@ -138,8 +164,12 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
         await it.editReply(`**${g.displayName || ""}:** ${g.memberCount ?? "?"} membros • Dono: ${g.owner ? `${g.owner.displayName} (@${g.owner.username})` : "?"}`);
       } else if (n === "previsao") {
         const p = await api("/api/pending");
-        const tot = (p.upcoming || []).reduce((s, u) => s + u.robux, 0);
-        await it.editReply(`**Previsão:** ${tot} liberando até ${p.lastDate || p.oldestDate || "?"} (±1 mês) • próxima: ${p.oldestDate || "?"} (${p.oldestRobux ?? "?"})`);
+        const tot = p.totalPending ?? 0;
+        const em = new EmbedBuilder().setColor(0xff7a00).setTitle("\u{1F4C8} PREVISÃO DE ROBUX A CAIR")
+          .setFooter({ text: "Born to Dream • Roblox Analytics" })
+          .setDescription(`**Total pendente:** ${fmtN(tot)}\n**Próximo:** ${p.proximo ? `${p.proximo.date} — ${fmtN(p.proximo.robux)}${p.proximo.emDias != null ? ` (em ${p.proximo.emDias} dias)` : ""}` : "—"}`)
+          .addFields({ name: "Por data de liberação", value: (p.porData || []).slice(0, 10).map((u) => `${u.date}: ${fmtN(u.robux)}`).join("\n") || "—" });
+        await it.editReply({ embeds: [em] });
       } else if (n === "ticket") {
         const a = await api("/api/analytics?days=30");
         await it.editReply(`**Ticket médio (30d):** ${a.ticketMedio ?? "?"} • ${a.sales ?? "?"} vendas`);
@@ -155,9 +185,16 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
         await it.editReply(`**Top compradores:**\n${lines}`);
       } else if (n === "resumo") {
         const [a, g, b] = await Promise.all([api("/api/analytics?days=7"), api("/api/group"), api("/api/balance")]);
-        await it.editReply(`**${g.displayName || ""}** • ${g.memberCount ?? "?"} membros\n**7d:** ${a.sales ?? "?"} vendas • **${a.salesTotalRobux ?? "?"}**\n**Saldo:** ${b.disponivel ?? "?"} • **Pendente:** ${b.pendente ?? "?"}`);
+        await it.editReply(`**${g.displayName || ""}** • ${g.memberCount ?? "?"} membros\n**7d:** ${a.sales ?? "?"} vendas • **${a.salesTotalRobux ?? "?"}**\n**Saldo:** ${b.disponivel ?? "?"} • **Pendente:** ${fmtN(b.pendente ?? "?")}`);
       } else if (n === "ajuda") {
-        await it.editReply("**Comandos:** /hoje /ultima /vendas /saldo /pendentes /previsao /ticket /compradores /ranking /membros /produto /resumo /ajuda");
+        await it.editReply("**Comandos:** /hoje /ultima /vendas /saldo /pendentes /previsao /ticket /compradores /ranking /membros /produto /resumo /ips /ajuda");
+      } else if (n === "ips") {
+        const a = await api("/api/access-log");
+        const items = (a.items || []).slice(0, 8);
+        const em = new EmbedBuilder().setColor(0x3ba55d).setTitle("\u{1F510} ÚLTIMOS ACESSOS AO PAINEL")
+          .setFooter({ text: "Born to Dream • Roblox Analytics" })
+          .setDescription(items.length ? items.map((i) => `\`${i.ip}\` • ${i.when} • \`${i.page}\``).join("\n") : "Nenhum acesso registrado ainda.");
+        await it.editReply({ embeds: [em] });
       } else if (n === "produto") {
         const raw = it.options.getString("nome", true);
         const a = await api("/api/analytics?days=30");
@@ -168,7 +205,7 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
         try { d = await api(`/api/product/${hit.assetId}/sales?days=30`); } catch { d = null; }
         if (!d || d.error) return void it.editReply("Roblox limitou a consulta agora. Tente de novo em 1 minuto.");
         const img = await thumb(hit.assetId);
-        const em = new EmbedBuilder().setColor(0xff7a00).setTitle(`📦 ${d.name}`)
+        const em = new EmbedBuilder().setColor(0xff7a00).setTitle(`\u{1F4E6} ${d.name}`)
           .setFooter({ text: "Born to Dream • Roblox Analytics" })
           .addFields(
             { name: "Vendas", value: `${d.vendas}`, inline: true },
@@ -182,6 +219,8 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
       try { await it.editReply("Falha ao buscar. Tente de novo."); } catch {}
     }
   });
+
+  function fmtN(n) { return Number(n || 0).toLocaleString("pt-BR"); }
 
   client.login(token).catch((e) => console.log("[discord-bot] login:", e.message));
 };
