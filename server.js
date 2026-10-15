@@ -636,6 +636,16 @@ async function fetchSalesPages(maxPages = 10, untilDate = null) {
 }
 
 // GET /api/analytics?days=7 | ?start=2026-09-01&end=2026-10-07
+/* ═══════════ dedupe: 1 busca em voo por chave (evita rajada de rede) ═══════════ */
+const inflight = new Map();
+function once(key, fn) {
+  if (inflight.has(key)) return inflight.get(key);
+  const p = Promise.resolve().then(fn).finally(() => inflight.delete(key));
+  inflight.set(key, p);
+  return p;
+}
+const salesFor = (fromKey, pages) => once("sales:" + fromKey + ":" + pages, () => fetchSalesPages(pages, new Date(fromKey + "T00:00:00")));
+
 app.get("/api/analytics", async (req, res) => {
   if (!COOKIE_RAW) {
     return res.status(503).json({ available: false, reason: "Conexão com o Roblox indisponível no servidor." });
@@ -665,17 +675,33 @@ app.get("/api/analytics", async (req, res) => {
   const attl = dayKeys.length <= 7 ? 60000 : dayKeys.length <= 30 ? 180000 : 300000;
   const hitA = cache.get(akey);
   if (hitA && Date.now() - hitA.at < attl) return res.json({ ...hitA.data, cached: true });
-  const sendA = (obj, ttl = null, diskKey = null) => {
-    cache.set(akey, { at: Date.now(), data: obj });
-    if (diskKey && obj.available && !obj.partial) {
-      saveDiskCache({ [diskKey]: { at: Date.now(), data: obj } });
-    }
-    return res.json(obj);
-  };
-  // backoff exponencial: se o Roblox recusou, o front espera mais a cada falha seguida
+
+  /* ── STALE-WHILE-REVALIDATE ──
+     se já temos algum dado (memória, disco ou KV), devolve NA HORA marcado como
+     stale e atualiza por trás. Assim a tela nunca fica travada esperando o Roblox. */
+  const staleObj = hitA ? hitA.data : (await store.read(akey, null));
+  if (staleObj && staleObj.available && !staleObj.partial) {
+    cache.set(akey, { at: Date.now(), data: staleObj }); // evita reconsultar o KV a cada request
+    res.json({ ...staleObj, stale: true });
+    refreshAnalytics(akey, dayKeys, label).catch(() => {});
+    return;
+  }
+  try {
+    const out = await refreshAnalytics(akey, dayKeys, label);
+    return res.json(out);
+  } catch (e) {
+    if (e && e.code === "NO_COOKIE") return res.status(503).json({ available: false, reason: e.message });
+    const saved = loadDiskCache()[akey];
+    if (saved) return res.json({ ...saved.data, stale: true });
+    return res.status(500).json({ available: false, reason: "Falha interna." });
+  }
+});
+
+/* busca os dados do Roblox e monta o payload. usado pela rota e pelo refresh em 2o plano */
+async function refreshAnalytics(akey, dayKeys, label) {
   const fails = partialFails.get(akey) || 0;
   try {
-    const official = await cached("official", 180000, async () => {
+  const official = await cached("official", 180000, async () => {
       const [dayR, weekR, monthR] = await Promise.all([
         economyFetch(`https://economy.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}/revenue/summary/Day`),
         economyFetch(`https://economy.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}/revenue/summary/Week`),
@@ -689,15 +715,16 @@ app.get("/api/analytics", async (req, res) => {
     });
     const pages = 25;
     const untilDate = new Date(dayKeys[0] + "T00:00:00");
-    const got = await cached("salesR:" + dayKeys[0], 45000, () => fetchSalesPages(pages, untilDate));
+    const got = await salesFor(dayKeys[0], pages);
     if (got.error) {
       L.warn("falha ao buscar vendas", { status: got.error.status });
-      const saved = loadDiskCache()[akey];
       partialFails.set(akey, fails + 1);
       const wait = expo(fails, 15000, 300000);
-      if (saved) return res.json({ ...saved.data, stale: true, retryAfter: wait });
-      return sendA({ available: true, partial: true, days: dayKeys.length, official, sales: null, ticketMedio: null, byDay: [], byHour: [], transactions: [], txError: got.error.status || "?", retryAfter: wait }, 15000);
+      const out = { available: true, partial: true, days: dayKeys.length, range: label, official, sales: null, ticketMedio: null, byDay: [], byHour: [], transactions: [], txError: got.error.status || "?", retryAfter: wait };
+      cache.set(akey, { at: Date.now(), data: out });
+      return out;
     }
+    partialFails.delete(akey);
     partialFails.delete(akey);
     const txs = got.txs;
     const set = new Set(dayKeys);
@@ -752,7 +779,7 @@ app.get("/api/analytics", async (req, res) => {
       saveJsonFile(SNAP_FILE, snap);
     } catch {}
 
-    return sendA({
+    const out = {
       available: true, days: dayKeys.length, range: label, today: todaySp,
       revenueToday, todayCount: todayTxs.length, revenuePeriod: totalRobux, official,
       sales, salesTotalRobux: totalRobux, ticketMedio, savedAt: new Date().toISOString(),
@@ -761,14 +788,20 @@ app.get("/api/analytics", async (req, res) => {
         const a = getAsset(t);
         return { id: t.id, created: t.created, robux: getRobux(t), assetName: a.name, assetId: a.id, buyerName: t.agent?.name || null, buyerId: t.agent?.id || null, buyerType: t.agent?.type || null };
       }),
-    }, null, akey);
+    };
+    // grava em memória + disco + KV (se ligado)
+    cache.set(akey, { at: Date.now(), data: out });
+    saveDiskCache({ [akey]: { at: Date.now(), data: out } });
+    store.write(akey, out).catch(() => {});
+    return out;
   } catch (e) {
-    if (e.code === "NO_COOKIE") return res.status(503).json({ available: false, reason: e.message });
-    const saved = loadDiskCache()[akey];
-    if (saved) return res.json({ ...saved.data, stale: true });
-    return res.status(500).json({ available: false, reason: "Falha interna." });
+    if (e && e.code === "NO_COOKIE") {
+      const err = new Error(e.message); err.code = "NO_COOKIE"; throw err;
+    }
+    L.warn("analytics falhou", { err: e && e.message });
+    throw e;
   }
-});
+}
 
 // Universos (experiências) do grupo + passes de jogo — só leitura pública
 app.get("/api/universes", async (_req, res) => {
@@ -817,52 +850,25 @@ app.get("/api/latest", async (_req, res) => {
 // Robux a liberar (hold de ~30 dias): agrupa por DATA DE LIBERAÇÃO
 // venda do dia 10 -> cai no dia 10 do mes seguinte. Mostra o pendente mais proximo.
 app.get("/api/pending", async (req, res) => {
+  // 1) devolve o que tem (KV/disco) na hora, sem esperar o Roblox
+  if (!req.query.fresh) {
+    const saved = await store.read("pending", null);
+    if (saved && saved.data && Date.now() - (saved.at || 0) < 10 * 60 * 1000) {
+      res.json(saved.data);
+      refreshPending().catch(() => {});
+      return;
+    }
+  }
   try {
     const got = req.query.fresh
       ? await fetchSalesPages(8)
-      : await cached("sales:10", 300000, () => fetchSalesPages(15));
+      : await salesFor("1990-01-01", 15);
     if (got.error) {
       const saved = await store.read("pending", null);
       if (saved && saved.data) return res.json({ ...saved.data, stale: true, retryAfter: 60000 });
       return res.status(503).json({ error: "Dados indisponíveis agora (limite do Roblox).", retryAfter: 60000 });
     }
-    const now = new Date();
-    const rel = {};
-    let pendingCount = 0, pendingRobux = 0;
-    const pendList = [];
-    for (const t of got.txs) {
-      if (!t.isPending) continue;
-      pendingCount++;
-      const robux = getRobux(t);
-      pendingRobux += robux;
-      const created = new Date(t.created);
-      const release = new Date(created.getTime() + 30 * 86400000);
-      const k = spDateKey(release);
-      rel[k] = (rel[k] || 0) + robux;
-      pendList.push({ created: spDateKey(created), release: k, assetName: getAsset(t).name, assetId: getAsset(t).id, robux });
-    }
-    const today = spDateKey(now);
-    const future = Object.entries(rel).filter(([k]) => k >= today).sort((a, b) => a[0].localeCompare(b[0]));
-    const past = Object.entries(rel).filter(([k]) => k < today).sort((a, b) => b[0].localeCompare(a[0]));
-
-    // proximo a cair: o mais proximo de hoje (futuro primeiro, senao o atrasado)
-    const proximo = future[0] || past[0] || null;
-    const daysTo = proximo ? Math.round((new Date(proximo[0] + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000) : null;
-
-    const upcoming = future.slice(0, 8).map(([date, robux]) => ({ date, robux }));
-    const out = {
-      // compativel com o front antigo
-      oldestDate: proximo ? proximo[0] : null,
-      oldestRobux: proximo ? proximo[1] : 0,
-      upcoming, pendingCount, totalPending: pendingRobux, pendingRobux,
-      lastDate: future.length ? future[future.length - 1][0] : (past.length ? past[0][0] : null),
-      // novos campos
-      proximo: proximo ? { date: proximo[0], robux: proximo[1], emDias: daysTo } : null,
-      atrasado: past.length ? { date: past[0][0], robux: past[0][1] } : null,
-      porData: [...future.slice(0, 12), ...past.slice(0, 4)].map(([date, robux]) => ({ date, robux, futuro: date >= today })),
-      items: pendList,
-      savedAt: new Date().toISOString(),
-    };
+    const out = buildPending(got.txs);
     await store.write("pending", { at: Date.now(), data: out });
     return res.json(out);
   } catch (e) {
@@ -877,6 +883,49 @@ app.get("/api/pending", async (req, res) => {
     return res.status(500).json({ error: "Falha interna." });
   }
 });
+
+/** recalcula pendentes/previsão e guarda (usado pelo /api/pending em 2o plano e pelo boot) */
+async function refreshPending() {
+  const got = await salesFor("1990-01-01", 15);
+  if (got.error) throw Object.assign(new Error("roblox indisponível"), { code: "ROBLOX" });
+  return buildPending(got.txs);
+}
+
+/** monta o payload de pendentes/previsão a partir das transações */
+function buildPending(txs) {
+    const now = new Date();
+    const rel = {};
+    let pendingCount = 0, pendingRobux = 0;
+    const pendList = [];
+    for (const t of txs) {
+      if (!t.isPending) continue;
+      pendingCount++;
+      const robux = getRobux(t);
+      pendingRobux += robux;
+      const created = new Date(t.created);
+      const release = new Date(created.getTime() + 30 * 86400000);
+      const k = spDateKey(release);
+      rel[k] = (rel[k] || 0) + robux;
+      pendList.push({ created: spDateKey(created), release: k, assetName: getAsset(t).name, assetId: getAsset(t).id, robux });
+    }
+    const today = spDateKey(now);
+    const future = Object.entries(rel).filter(([k]) => k >= today).sort((a, b) => a[0].localeCompare(b[0]));
+    const past = Object.entries(rel).filter(([k]) => k < today).sort((a, b) => b[0].localeCompare(a[0]));
+    const proximo = future[0] || past[0] || null;
+    const daysTo = proximo ? Math.round((new Date(proximo[0] + "T00:00:00") - new Date(today + "T00:00:00")) / 86400000) : null;
+    const upcoming = future.slice(0, 8).map(([date, robux]) => ({ date, robux }));
+    return {
+      oldestDate: proximo ? proximo[0] : null,
+      oldestRobux: proximo ? proximo[1] : 0,
+      upcoming, pendingCount, totalPending: pendingRobux, pendingRobux,
+      lastDate: future.length ? future[future.length - 1][0] : (past.length ? past[0][0] : null),
+      proximo: proximo ? { date: proximo[0], robux: proximo[1], emDias: daysTo } : null,
+      atrasado: past.length ? { date: past[0][0], robux: past[0][1] } : null,
+      porData: [...future.slice(0, 12), ...past.slice(0, 4)].map(([date, robux]) => ({ date, robux, futuro: date >= today })),
+      items: pendList,
+      savedAt: new Date().toISOString(),
+    };
+}
 
 /* ── log de acesso (lista pro comando /ips) ── */
 app.get("/api/access-log", async (req, res) => {
@@ -1181,32 +1230,13 @@ app.get("*", (_req, res) => {
 
 app.listen(PORT, () => {
   L.info(`dashboard no ar em http://localhost:${PORT}`, { grupo: GROUP_ID, store: store.status() });
-  store.syncFromKV(["goals", "snapshot", "events"]).then((n) => {
+  store.syncFromKV(["goals", "snapshot", "events", "pending", "analytics:d1", "analytics:d7", "analytics:d30"]).then((n) => {
     if (n) L.info("espelho KV sincronizado", { chaves: n });
   }).catch(() => {});
-  // pré-aquece o cache pesado (90 dias) para abrir rápido
-  if (COOKIE_RAW) {
-    const warm = async () => {
-      try {
-        const d = new Date(); d.setDate(d.getDate() - 89);
-        const key = "salesR:" + spDateKey(d);
-        const untilDate = new Date(spDateKey(d) + "T00:00:00");
-        const got = await fetchSalesPages(15, untilDate);
-        if (!got.error) cache.set(key, { at: Date.now(), data: got });
-      } catch {}
-    };
-    setTimeout(warm, 30000);
-    setInterval(warm, 10 * 60 * 1000);
-    // aquece a lista curta (pendente/produto) logo no boot
-    setTimeout(async () => {
-      try {
-        const got = await fetchSalesPages(10);
-        if (!got.error) cache.set("sales:10", { at: Date.now(), data: got });
-      } catch {}
-    }, 90000);
-  }
-  // bot do Discord (comandos + avisos de venda)
-  if (process.env.DISCORD_TOKEN && process.env.DISCORD_CHANNEL_ID) {
+  // bot do Discord (comandos + avisos de venda + IP de acesso)
+  const tok = !!process.env.DISCORD_TOKEN, ch = !!process.env.DISCORD_CHANNEL_ID;
+  if (tok && ch) {
+    L.info("bot do Discord: iniciando", { guild: process.env.DISCORD_GUILD_ID ? "sim" : "nao (comandos globais)" });
     try {
       require("./discord-bot")({
         port: PORT,
@@ -1214,13 +1244,32 @@ app.listen(PORT, () => {
         channelId: process.env.DISCORD_CHANNEL_ID,
         guildId: process.env.DISCORD_GUILD_ID || "",
       });
-    } catch (e) { console.log("[discord-bot]", e.message); }
+    } catch (e) { L.error("bot do Discord falhou ao iniciar", { err: e.message }); }
   } else {
-    console.log("Bot Discord: desligado (DISCORD_TOKEN/DISCORD_CHANNEL_ID)");
+    L.warn("bot do Discord desligado", { temToken: tok, temCanal: ch });
+  }
+  // aquece o cache em 2o plano: a 1a visita já cai no stale-while-revalidate
+  if (COOKIE_RAW) {
+    const warm = async (key, pages) => {
+      try {
+        const d = new Date(); d.setDate(d.getDate() - (key === "d90" ? 89 : key === "d30" ? 29 : 6));
+        const got = await salesFor(spDateKey(d), pages);
+        if (!got.error) {
+          cache.set("analytics:" + key, { at: Date.now(), data: { available: true, warm: true } });
+          L.info("cache aquecido", { range: key });
+        }
+      } catch {}
+    };
+    refreshPending().then(() => L.info("pendentes calculados no boot"))
+      .catch((e) => L.warn("pendentes no boot falharam", { err: e.message }));
+    setTimeout(() => warm("d7", 25), 2000);
+    setTimeout(() => warm("d30", 25), 45000);
+    setTimeout(() => refreshPending().catch(() => {}), 120000);
+    setInterval(() => refreshPending().catch(() => {}), 5 * 60 * 1000);
   }
   // avisos de venda no WhatsApp (CallMeBot)
   if (WA_PHONE.length && WA_APIKEY.length && COOKIE_RAW) {
-    console.log(`WhatsApp: ok (${WA_PHONE.length} número(s))`);
+    L.info(`WhatsApp: ok (${WA_PHONE.length} número(s))`);
     setTimeout(waPoll, 150000);
     setInterval(waPoll, 180 * 1000);
   } else {

@@ -60,25 +60,36 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
   };
 
   const client = new Client({ intents: [GatewayIntentBits.Guilds] });
+  const say = (m, e) => console.log(`[discord-bot] ${m}`, e || "");
 
   client.once(Events.ClientReady, async () => {
-    console.log(`[discord-bot] logado como ${client.user.tag}`);
+    say(`logado como ${client.user.tag}`);
     try {
       const rest = new REST({ version: "10" }).setToken(token);
       if (guildId) {
         await rest.put(Routes.applicationGuildCommands(client.user.id, guildId), { body: COMMANDS });
-        console.log("[discord-bot] comandos registrados no servidor");
+        say("comandos registrados no servidor (instantaneo)");
       } else {
         await rest.put(Routes.applicationCommands(client.user.id), { body: COMMANDS });
-        console.log("[discord-bot] comandos globais (podem demorar até 1h)");
+        say("comandos globais registrados (podem demorar ate 1h)");
       }
-    } catch (e) { console.log("[discord-bot] comandos:", e.message); }
-    setTimeout(poll, 60000);
+    } catch (e) { say("comandos: " + e.message); }
+    say("vigia de vendas ligado (2 min)");
+    setTimeout(poll, 45000);
     setInterval(poll, 120 * 1000);
   });
 
-  client.on(Events.Error, (e) => console.log("[discord-bot] erro:", e.message));
-  process.on("unhandledRejection", (e) => console.log("[discord-bot] rejeição:", (e && e.message) || e));
+  // diagnostico: qualquer problema de conexao aparece no log
+  client.on(Events.Error, (e) => say("ERRO: " + e.message));
+  client.on(Events.Warn, (e) => say("aviso: " + e.message));
+  client.on(Events.ShardError, (e) => say("shard: " + e.message));
+  client.on(Events.ShardDisconnect, (_e, code) => say("desconectou, codigo " + code));
+  client.on(Events.ShardReconnecting, () => say("reconectando..."));
+  client.on(Events.Invalidated, () => say("sessao invalidada (token revogado?)"));
+  process.on("unhandledRejection", (e) => say("rejeicao: " + ((e && e.message) || e)));
+  process.on("uncaughtException", (e) => say("excecao: " + ((e && e.message) || e)));
+
+  say("conectando ao Discord...");
 
   /** avisa no canal que alguem entrou no painel */
   async function notifyAccess({ ip, ua, page, when }) {
@@ -132,7 +143,8 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
     }
     if (!it.isChatInputCommand()) return;
     try {
-      await it.deferReply();
+    try { await it.deferReply(); }
+    catch (de) { say("deferReply falhou: " + de.message); return; }
       const n = it.commandName;
       if (n === "hoje") {
         const a = await api("/api/analytics?days=1");
@@ -216,11 +228,18 @@ module.exports = function startBot({ port, token, channelId, guildId }) {
         await it.editReply({ embeds: [em] });
       }
     } catch (e) {
-      try { await it.editReply("Falha ao buscar. Tente de novo."); } catch {}
+      try {
+      if (it.deferred || it.replied) await it.editReply("Falha ao buscar. Tente de novo.");
+      else await it.reply({ content: "Falha ao buscar. Tente de novo.", ephemeral: true });
+    } catch {}
     }
   });
 
   function fmtN(n) { return Number(n || 0).toLocaleString("pt-BR"); }
 
-  client.login(token).catch((e) => console.log("[discord-bot] login:", e.message));
+  say("iniciando login...");
+  client.login(token).then(
+    () => say("token aceito, aguardando conexao"),
+    (e) => say("LOGIN FALHOU: " + e.message)
+  );
 };
