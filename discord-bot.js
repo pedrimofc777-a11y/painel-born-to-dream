@@ -139,7 +139,7 @@ module.exports = function startBot(opts) {
           { name: "Quando", value: info.when, inline: true },
           { name: "Dispositivo", value: (info.ua || "?").slice(0, 180) }
         );
-      await ch.send({ content: "@everyone", embeds: [em] });
+      await ch.send({ embeds: [em] });
     } catch {}
   }
   global.__btdNotifyAccess = notifyAccess;
@@ -152,9 +152,26 @@ module.exports = function startBot(opts) {
       const a = await api("/api/analytics?days=1");
       if (!a || !a.transactions || !a.transactions.length) return;
       const st = load();
-      if (!st.last) { st.last = String(a.transactions[0].id); save(st); return; }
-      const fresh = a.transactions.filter((t) => Number(t.id) > Number(st.last)).reverse().slice(-3);
-      st.last = String(a.transactions[0].id);
+      // lista de ids ja vistos (migra do formato antigo "last")
+      let seen = Array.isArray(st.seen) ? st.seen.map(String) : [];
+      if (!seen.length && st.last) seen = [String(st.last)];
+      const seenSet = new Set(seen);
+      const isFirst = seenSet.size === 0;
+      const now = Date.now();
+      // na primeira leitura apos deploy, avisa vendas dos ultimos 15 min
+      // (pega vendas que aconteceram durante o deploy); depois, avisa
+      // tudo que ainda nao foi visto e tenha ate 3h (evita spam antigo)
+      const maxAge = isFirst ? 15 * 60 * 1000 : 3 * 3600 * 1000;
+      const fresh = a.transactions
+        .filter((t) => !seenSet.has(String(t.id)))
+        .filter((t) => {
+          const ts = new Date(t.created).getTime();
+          return !isNaN(ts) && now - ts >= 0 && now - ts < maxAge;
+        })
+        .reverse()
+        .slice(-3);
+      st.seen = a.transactions.slice(0, 100).map((t) => String(t.id));
+      delete st.last;
       save(st);
       for (const t of fresh) {
         await ch.send({ content: "@everyone", embeds: [saleEmbed(t, a.todayCount, await thumb(t.assetId))] });
