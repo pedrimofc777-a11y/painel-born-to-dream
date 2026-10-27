@@ -619,7 +619,15 @@ async function fetchSalesPages(maxPages = 10, untilDate = null) {
       r = await economyFetch(url.toString());
       d = await readJson(r);
     }
-    if (!r.ok) return { error: { status: r.status, data: d } };
+    if (!r.ok) {
+      /* NÃO é tudo-ou-nada: se já coletamos páginas, devolve o que temos
+         marcado como parcial. Um 429 na página 12 não pode zerar as 11 anteriores. */
+      if (txs.length > 0) {
+        L.warn("vendas parcial: falha na página " + (page + 1) + "/" + maxPages, { status: r.status, txs: txs.length });
+        return { txs, partial: true, status: r.status };
+      }
+      return { error: { status: r.status, data: d } };
+    }
     const items = Array.isArray(d.data) ? d.data : [];
     for (const t of items) txs.push(t);
     cursor = d.nextPageCursor || "";
@@ -644,6 +652,7 @@ function once(key, fn) {
 }
 const FULL_TTL = 60 * 1000; // 60s: mesmo ritmo de 1 minuto que funcionava antes
 let fullSaleErr = null;
+const refreshing = new Set(); // akeys com refresh em voo (evita rajada no cold start)
 /**
  * Bus grande ÚNICA: 25 páginas de vendas, sem parar cedo.
  * analytics, pendente e produto derivam dela — evita as 3 buscas separadas
@@ -653,15 +662,33 @@ let fullSaleErr = null;
 function salesFull() {
   return once("sales:full", () => fetchSalesPages(25, null));
 }
-/** busca grande com cache; devolve { txs } ou { error } */
+/** atualiza em 2º plano: nunca bloqueia quem pediu dado */
+function refreshSalesInBackground() {
+  if (inflight.has("sales:full")) return; // já tem uma busca em voo
+  salesFull().then((data) => {
+    if (data.error) { fullSaleErr = data.error; L.warn("refresh de vendas falhou", { status: data.error.status }); }
+    else { cache.set("sales:full", { at: Date.now(), data }); fullSaleErr = null; }
+  }).catch(() => {});
+}
+/**
+ * Busca grande com cache, padrão stale-while-revalidate:
+ *  - dado fresco (TTL)  -> devolve na hora;
+ *  - dado velho         -> devolve na hora e REFRESHA em 2º plano;
+ *  - nada               -> busca e espera (só no primeiro acesso).
+ * Um erro NUNCA sobrescreve um dado bom no cache (senão o painel "esvazia").
+ */
 async function salesCached() {
   const hit = cache.get("sales:full");
-  if (hit && Date.now() - hit.at < FULL_TTL) return hit.data;
-  const data = await salesFull();
-  cache.set("sales:full", { at: Date.now(), data });
-  if (data.error) fullSaleErr = data.error;
-  else fullSaleErr = null;
-  return data;
+  const now = Date.now();
+  if (hit && now - hit.at < FULL_TTL) return hit.data;
+  if (!hit) {
+    const data = await salesFull(); // frio: sem o que servir, precisa esperar
+    if (!data.error) { cache.set("sales:full", { at: now, data }); fullSaleErr = null; }
+    else fullSaleErr = data.error;
+    return data;
+  }
+  refreshSalesInBackground();
+  return { ...hit.data, stale: true };
 }
 
 app.get("/api/analytics", async (req, res) => {
@@ -694,25 +721,27 @@ app.get("/api/analytics", async (req, res) => {
   const hitA = cache.get(akey);
   if (hitA && Date.now() - hitA.at < attl) return res.json({ ...hitA.data, cached: true });
 
-  /* dado velho só é servido na hora se tiver menos de 3 min — depois disso
-     espera o fresco (é o que dá a sensação de "carregando aos poucos"). */
+  /* padrão stale-while-revalidate: se existe QUALQUER dado salvo (memória ou
+     disco), entrega na hora e atualiza em 2º plano. Só bloqueia quando não há
+     nada (primeiro acesso). Assim o bot/painel nunca fica 30-150s preso. */
   const staleObj = hitA ? hitA.data : (await store.read(akey, null));
-  const staleAge = staleObj && staleObj.savedAt ? Date.now() - new Date(staleObj.savedAt).getTime() : Infinity;
-  if (staleObj && staleObj.available && !staleObj.partial && staleAge < 3 * 60 * 1000) {
+  if (staleObj && staleObj.available) {
     cache.set(akey, { at: Date.now(), data: staleObj });
-    res.json({ ...staleObj, stale: true });
     refreshAnalytics(akey, dayKeys, label).catch(() => {});
-    return;
+    return res.json({ ...staleObj, stale: true });
   }
-  try {
-    const out = await refreshAnalytics(akey, dayKeys, label);
-    return res.json(out);
-  } catch (e) {
-    if (e && e.code === "NO_COOKIE") return res.status(503).json({ available: false, reason: e.message });
-    const saved = loadDiskCache()[akey];
-    if (saved) return res.json({ ...saved.data, stale: true });
-    return res.status(500).json({ available: false, reason: "Falha interna." });
+  /* cold start (nada salvo ainda): NÃO bloqueia. Dispara a busca em 2º plano e
+     devolve "parcial" imediato — o painel mostra "Sincronizando" e refaz em
+     instantes; o bot responde na hora em vez de travar 30-150s no Roblox. */
+  if (!refreshing.has(akey)) {
+    refreshing.add(akey);
+    refreshAnalytics(akey, dayKeys, label).finally(() => refreshing.delete(akey)).catch(() => {});
   }
+  return res.json({
+    available: true, partial: true, sales: null, days: dayKeys.length, range: label,
+    official: null, byDay: [], byHour: [], transactions: [], salesList: [], ranking: [], todayList: [],
+    retryAfter: 20000,
+  });
 });
 
 /* busca os dados do Roblox e monta o payload. usado pela rota e pelo refresh em 2o plano */
