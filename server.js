@@ -1260,6 +1260,7 @@ app.listen(PORT, () => {
         token: process.env.DISCORD_TOKEN,
         channelId: process.env.DISCORD_CHANNEL_ID,
         guildId: process.env.DISCORD_GUILD_ID || "",
+        panelPass: PANEL_PASS,
       });
     } catch (e) { L.error("bot do Discord falhou ao iniciar", { err: e.message }); }
   } else {

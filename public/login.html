@@ -53,8 +53,9 @@ document.getElementById('lgForm').addEventListener('submit', async function (e) 
     var r = await fetch('/api/login', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ password: pass }) });
     var j = await r.json().catch(function () { return {}; });
     if (r.ok && j.ok) {
-      var to = location.search.indexOf('next=') === 0 ? decodeURIComponent(location.search.replace('?next=', '')) : '/';
-      location.replace(to.startsWith('/') ? to : '/');
+      var m = location.search.match(/[?&]next=([^&]+)/);
+      var to = m ? decodeURIComponent(m[1]) : '/';
+      location.replace(to && to.charAt(0) === '/' ? to : '/');
       return;
     }
     attempts++;

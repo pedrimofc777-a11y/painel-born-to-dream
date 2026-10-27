@@ -1,5 +1,5 @@
 /* Born to Dream — cache offline: abre o painel sem internet com os últimos dados */
-const V = "btd-v6";
+const V = "btd-v7";
 const CORE = [
   "/",
   "/index.html",
@@ -36,14 +36,25 @@ self.addEventListener("fetch", (e) => {
 
   // API: tenta rede, cai pro cache se estiver offline (mostra o último dado)
   if (url.pathname.startsWith("/api/")) {
+    // /api/me e qualquer 401 NUNCA vão pro cache: senão o estado de login fica
+    // "congelado" (servindo 200 velho) e o painel entra em loop de login.
+    const ehAuth = url.pathname === "/api/me";
     e.respondWith(
       fetch(req)
         .then((r) => {
-          const copy = r.clone();
-          caches.open(V).then((c) => c.put(req, copy)).catch(() => {});
+          if (!ehAuth && r.status !== 401) {
+            const copy = r.clone();
+            caches.open(V).then((c) => c.put(req, copy)).catch(() => {});
+          }
           return r;
         })
         .catch(async () => {
+          if (ehAuth) {
+            // estado de sessão não pode vir do cache — devolve 401 e deixa o app decidir
+            return new Response(JSON.stringify({ error: "unauthorized", auth: true }), {
+              status: 401, headers: { "Content-Type": "application/json" },
+            });
+          }
           const c = await caches.open(V);
           const hit = await c.match(req);
           if (hit) return hit;

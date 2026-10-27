@@ -57,15 +57,20 @@ module.exports = function startBot(opts) {
   const guildId = opts.guildId;
 
   const say = (m) => console.log("[discord-bot] " + m);
+  // o bot fala com a API local como qualquer cliente: manda o Bearer (PANEL_PASS).
+  // o timeout evita o comando ficar preso em "pensando..." se o Roblox demorar.
   const api = async (p) => {
-    const r = await fetch("http://127.0.0.1:" + port + p, { headers: { "x-bot": "1" } });
+    const r = await fetch("http://127.0.0.1:" + port + p, {
+      headers: { "x-bot": "1", authorization: "Bearer " + (opts.panelPass || process.env.PANEL_PASS || "") },
+      signal: AbortSignal.timeout(30000),
+    });
     return r.json();
   };
 
   let client = null;
   let tentativas = 0;
   let pollTimer = null;
-  const MAX = 5;
+  let watchdog = null;
 
   /* Client NOVO por tentativa: reutilizar um Client destruído
      faz o Discord identificar 2x e derrubar a sessão. */
@@ -73,6 +78,8 @@ module.exports = function startBot(opts) {
     const c = new Client({ intents: [GatewayIntentBits.Guilds] });
 
     c.once(Events.ClientReady, async () => {
+      tentativas = 0; // conectou: zera o contador (senão o 1º reconnect já "desiste")
+      if (watchdog) { clearTimeout(watchdog); watchdog = null; }
       say("logado como " + c.user.tag + " - " + c.guilds.cache.size + " servidor(es)");
       try {
         const rest = new REST({ version: "10" }).setToken(token);
@@ -104,24 +111,30 @@ module.exports = function startBot(opts) {
     return c;
   }
 
+  /* Reconexão robusta:
+     - NUNCA desiste (o bot reconecta sozinho pra sempre, com backoff).
+     - O watchdog só dispara uma nova tentativa se ainda NÃO estiver pronto;
+       ao conectar (ClientReady) ele é cancelado, então um READY lento não
+       derruba mais um client que estava funcionando. */
   function entrar() {
     tentativas++;
-    if (tentativas > MAX) { say("desisti apos " + MAX + " tentativas."); return; }
     if (client) { try { client.destroy(); } catch {} }
     client = novoClient();
-    say("tentativa " + tentativas + "/" + MAX + " - conectando...");
-    const t = setTimeout(() => {
-      if (client && client.isReady && client.isReady()) return;
-      say("tentativa " + tentativas + " nao conectou em 20s" + (tentativas < MAX ? " - nova em 15s" : ""));
-      setTimeout(entrar, 15000);
+    say("tentativa " + tentativas + " - conectando...");
+    if (watchdog) clearTimeout(watchdog);
+    watchdog = setTimeout(() => {
+      if (client && client.isReady && client.isReady()) return; // já logou; watchdog vira no-op
+      const espera = Math.min(15000 + tentativas * 5000, 60000); // backoff suave
+      say("ainda nao conectou em 20s - nova tentativa em " + Math.round(espera / 1000) + "s");
+      entrar();
     }, 20000);
-    t.unref();
+    if (watchdog.unref) watchdog.unref();
     client.login(token).then(
       () => say("token aceito, aguardando READY..."),
       (e) => {
-        clearTimeout(t);
-        say("LOGIN FALHOU: " + e.message);
-        if (tentativas < MAX) setTimeout(entrar, 20000);
+        if (watchdog) { clearTimeout(watchdog); watchdog = null; }
+        say("LOGIN FALHOU: " + e.message + " - nova em 30s");
+        setTimeout(entrar, 30000);
       }
     );
   }
