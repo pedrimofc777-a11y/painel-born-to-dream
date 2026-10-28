@@ -905,6 +905,17 @@ async function officialPendingRobux() {
   });
   return o && o.robux != null ? o.robux : null;
 }
+/** aplica o valor OFICIAL ao payload e destrava a contagem (estimada pela
+ *  média de preço das pendentes parciais — a paginação do 429 capava em 2499). */
+function applyOfficialPending(out, auth) {
+  if (auth == null) return out;
+  const media = out.pendingCount > 0 && out.pendingRobux > 0 ? out.pendingRobux / out.pendingCount : 0;
+  out.pendingRobux = auth;
+  out.totalPending = auth;
+  out.oficial = true;
+  if (media > 0) out.pendingCount = Math.max(out.pendingCount, Math.round(auth / media));
+  return out;
+}
 
 // Robux a liberar (hold de ~30 dias): agrupa por DATA DE LIBERAÇÃO
 // venda do dia 10 -> cai no dia 10 do mes seguinte. Mostra o pendente mais proximo.
@@ -920,7 +931,7 @@ app.get("/api/pending", async (req, res) => {
   }
   try {
     /* valor OFICIAL do Roblox (1 chamada cacheada de 5 min) — é um saldo, então
-       não sofre o 429 nem "abaibe" sozinho como a soma das transações fazia. */
+       não sofre o 429 nem "abaixa" sozinho como a soma das transações fazia. */
     const auth = await officialPendingRobux();
     const got = req.query.fresh ? await salesFull() : await salesCached();
     if (got.error) {
@@ -935,9 +946,10 @@ app.get("/api/pending", async (req, res) => {
       return res.status(503).json({ error: "Dados indisponíveis agora (limite do Roblox).", retryAfter: 60000 });
     }
     const out = buildPending(got.txs);
-    /* valor TOTAL oficial (bate com o grupo); contagem/previsão continuam vindo
-       das transações da busca compartilhada (mesmos dados da analytics). */
-    if (auth != null) { out.pendingRobux = auth; out.totalPending = auth; out.oficial = true; }
+    /* contagem: a paginação do 429 só entrega ~2500 transações, então a soma
+       parcial "trava" em 2499 e não bate com os 45k. applyOfficialPending põe o
+       valor oficial e destrava a contagem (estimada pelo preço médio). */
+    applyOfficialPending(out, auth);
     await store.write("pending", { at: Date.now(), data: out });
     return res.json(out);
   } catch (e) {
@@ -958,8 +970,7 @@ async function refreshPending() {
   const got = await salesCached();
   if (got.error) throw Object.assign(new Error("roblox indisponível"), { code: "ROBLOX" });
   const out = buildPending(got.txs);
-  const auth = await officialPendingRobux();
-  if (auth != null) { out.pendingRobux = auth; out.totalPending = auth; out.oficial = true; }
+  applyOfficialPending(out, await officialPendingRobux());
   await store.write("pending", { at: Date.now(), data: out });
   return out;
 }
