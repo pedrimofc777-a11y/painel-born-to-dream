@@ -893,6 +893,19 @@ app.get("/api/latest", async (_req, res) => {
     return res.status(500).json({ error: "Falha interna." });
   }
 });
+/** pendente OFICIAL do Roblox (resumo do mês) — bate com o valor do grupo.
+ *  O valor do cartão vem daqui: é um saldo, não depende das páginas que o 429
+ *  deixa de entregar (a soma das transações flutuava: 42k -> 30k -> ...). */
+async function officialPendingRobux() {
+  const o = await cached("sum:pending", 300000, async () => {
+    const r = await economyFetch(`https://economy.roblox.com/v1/groups/${encodeURIComponent(GROUP_ID)}/revenue/summary/Month`);
+    if (!r.ok) return { robux: null };
+    const s = await readJson(r);
+    return { robux: Number(s.pendingRobux) || 0 };
+  });
+  return o && o.robux != null ? o.robux : null;
+}
+
 // Robux a liberar (hold de ~30 dias): agrupa por DATA DE LIBERAÇÃO
 // venda do dia 10 -> cai no dia 10 do mes seguinte. Mostra o pendente mais proximo.
 app.get("/api/pending", async (req, res) => {
@@ -906,15 +919,25 @@ app.get("/api/pending", async (req, res) => {
     }
   }
   try {
-    const got = req.query.fresh
-      ? await salesFull()
-      : await salesCached();
+    /* valor OFICIAL do Roblox (1 chamada cacheada de 5 min) — é um saldo, então
+       não sofre o 429 nem "abaibe" sozinho como a soma das transações fazia. */
+    const auth = await officialPendingRobux();
+    const got = req.query.fresh ? await salesFull() : await salesCached();
     if (got.error) {
+      /* sem transações agora: ainda devolve o valor oficial (não mostra 0 nem trava). */
+      if (auth != null) {
+        const out = { pendingRobux: auth, totalPending: auth, pendingCount: 0, upcoming: [], porData: [], oficial: true, stale: true, retryAfter: 60000 };
+        await store.write("pending", { at: Date.now(), data: out });
+        return res.json(out);
+      }
       const saved = await store.read("pending", null);
       if (saved && saved.data) return res.json({ ...saved.data, stale: true, retryAfter: 60000 });
       return res.status(503).json({ error: "Dados indisponíveis agora (limite do Roblox).", retryAfter: 60000 });
     }
     const out = buildPending(got.txs);
+    /* valor TOTAL oficial (bate com o grupo); contagem/previsão continuam vindo
+       das transações da busca compartilhada (mesmos dados da analytics). */
+    if (auth != null) { out.pendingRobux = auth; out.totalPending = auth; out.oficial = true; }
     await store.write("pending", { at: Date.now(), data: out });
     return res.json(out);
   } catch (e) {
@@ -930,11 +953,15 @@ app.get("/api/pending", async (req, res) => {
   }
 });
 
-/** recalcula pendentes/previsão e guarda (usado pelo /api/pending em 2o plano e pelo boot) */
+/** recalcula pendentes/previsão e guarda (usado pelo boot) */
 async function refreshPending() {
   const got = await salesCached();
   if (got.error) throw Object.assign(new Error("roblox indisponível"), { code: "ROBLOX" });
-  return buildPending(got.txs);
+  const out = buildPending(got.txs);
+  const auth = await officialPendingRobux();
+  if (auth != null) { out.pendingRobux = auth; out.totalPending = auth; out.oficial = true; }
+  await store.write("pending", { at: Date.now(), data: out });
+  return out;
 }
 
 /** monta o payload de pendentes/previsão a partir das transações */
