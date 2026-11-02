@@ -262,6 +262,21 @@ function getAsset(t = {}) {
   return { name: d.name || t.assetName || "Item", id: d.id ?? t.assetId ?? null };
 }
 
+/* ── chave estável por venda ──
+   O Roblox devolve id: 0 em TODAS as transações de grupo, entao o "id" nunca
+   servia para detectar venda nova (o bot parava de avisar e o site travava na
+   mesma venda). Usamos o `created` (ms): é unico, ordenado (ISO ordena em
+   ordem lexicografica) e ja vem em todas as linhas. */
+function txKey(t) { return String(t.created || t.id || ""); }
+function mapTx(t) {
+  const a = getAsset(t);
+  return {
+    id: txKey(t), created: t.created, robux: getRobux(t),
+    assetName: a.name, assetId: a.id,
+    buyerName: t.agent?.name || null, buyerId: t.agent?.id || null, buyerType: t.agent?.type || null,
+  };
+}
+
 /* contador de falhas seguidas por período (backoff) */
 const partialFails = new Map();
 setInterval(() => { if (partialFails.size > 40) partialFails.clear(); }, 10 * 60 * 1000).unref();
@@ -691,6 +706,25 @@ async function salesCached() {
   return { ...hit.data, stale: true };
 }
 
+/**
+ * Busca GARANTIDAMENTE NOVA: espera a busca em voo terminar e dispara outra.
+ * Só assim o Roblox lê a página 1 DEPOIS do horário pedido — usado pelo
+ * relatório das 00h, para as vendas das 23:59 caírem no dia certo.
+ * Com intervalo mínimo de 90s para não saturar a fila do economy.
+ */
+let ultimaBuscaNova = 0;
+async function salesFresh() {
+  const noIntervalo = Date.now() - ultimaBuscaNova < 90 * 1000;
+  const voando = inflight.get("sales:full");
+  if (voando) { try { await voando; } catch {} } // nunca reusa dado lido antes do horário pedido
+  if (noIntervalo) return salesCached();
+  ultimaBuscaNova = Date.now();
+  const data = await salesFull();
+  if (!data.error) { cache.set("sales:full", { at: Date.now(), data }); fullSaleErr = null; }
+  else fullSaleErr = data.error;
+  return data;
+}
+
 app.get("/api/analytics", async (req, res) => {
   if (!COOKIE_RAW) {
     return res.status(503).json({ available: false, reason: "Conexão com o Roblox indisponível no servidor." });
@@ -727,7 +761,12 @@ app.get("/api/analytics", async (req, res) => {
   const staleObj = hitA ? hitA.data : (await store.read(akey, null));
   if (staleObj && staleObj.available) {
     cache.set(akey, { at: Date.now(), data: staleObj });
-    refreshAnalytics(akey, dayKeys, label).catch(() => {});
+    /* guardado: sem isso cada pedido (site + bot, a cada 30-60s) disparava um
+       refresh novo enquanto o anterior ainda corria -> fila do Roblox lotada. */
+    if (!refreshing.has(akey)) {
+      refreshing.add(akey);
+      refreshAnalytics(akey, dayKeys, label).finally(() => refreshing.delete(akey)).catch(() => {});
+    }
     return res.json({ ...staleObj, stale: true });
   }
   /* cold start (nada salvo ainda): NÃO bloqueia. Dispara a busca em 2º plano e
@@ -789,14 +828,8 @@ async function refreshAnalytics(akey, dayKeys, label) {
     const byDay = dayKeys.map((k) => ({ date: k, label: `${k.slice(8, 10)}/${k.slice(5, 7)}`, weekday: spWeekdayShort(k), robux: byDayMap[k] || 0 }));
     const byHour = Array.from({ length: 24 }, (_, h) => ({ hour: h, label: `${String(h).padStart(2, "0")}h`, robux: 0 }));
     todayTxs.forEach((t) => { byHour[spHour(t.created)].robux += getRobux(t); });
-    const transactions = txs.slice(0, 100).map((t) => {
-      const a = getAsset(t);
-      return { id: t.id, created: t.created, robux: getRobux(t), assetName: a.name, assetId: a.id, buyerName: t.agent?.name || null, buyerId: t.agent?.id || null, buyerType: t.agent?.type || null };
-    });
-    const salesList = inPeriod.map((t) => {
-      const a = getAsset(t);
-      return { id: t.id, created: t.created, robux: getRobux(t), assetName: a.name, assetId: a.id, buyerName: t.agent?.name || null, buyerId: t.agent?.id || null, buyerType: t.agent?.type || null };
-    });
+    const transactions = txs.slice(0, 100).map(mapTx);
+    const salesList = inPeriod.map(mapTx);
     const rankMap = {};
     inPeriod.forEach((t) => {
       const a = getAsset(t);
@@ -830,10 +863,7 @@ async function refreshAnalytics(akey, dayKeys, label) {
       revenueToday, todayCount: todayTxs.length, revenuePeriod: totalRobux, official,
       sales, salesTotalRobux: totalRobux, ticketMedio, savedAt: new Date().toISOString(),
       byDay, byHour, transactions, salesList, ranking,
-      todayList: todayTxs.slice(0, 500).map((t) => {
-        const a = getAsset(t);
-        return { id: t.id, created: t.created, robux: getRobux(t), assetName: a.name, assetId: a.id, buyerName: t.agent?.name || null, buyerId: t.agent?.id || null, buyerType: t.agent?.type || null };
-      }),
+      todayList: todayTxs.slice(0, 500).map(mapTx),
     };
     // grava em memória + disco + KV (se ligado)
     cache.set(akey, { at: Date.now(), data: out });
@@ -872,7 +902,7 @@ app.get("/api/game-passes", async (req, res) => {
     return res.status(500).json({ error: "Falha interna." });
   }
 });
-// Leitura rápida (5 últimas vendas) para o site detetar venda nova sem recarregar tudo
+// Leitura rápida (10 últimas vendas) para o site mostrar a última venda na hora
 app.get("/api/latest", async (_req, res) => {
   try {
     const out = await cached("latest", 45000, async () => {
@@ -880,9 +910,13 @@ app.get("/api/latest", async (_req, res) => {
       const r = await economyFetch(url);
       const d = await readJson(r);
       if (!r.ok) return { error: true };
+      /* devolve as 10 vendas frescas: o site usa isso pra atualizar a
+         mini-lista "Últimas vendas" em ~45s sem refazer o dashboard todo. */
+      const txs = (d.data || []).map(mapTx);
       return {
-        firstId: d.data && d.data[0] ? d.data[0].id : null,
-        count: (d.data || []).length,
+        firstId: txs.length ? txs[0].id : null,
+        count: txs.length,
+        transactions: txs,
         today: spDateKey(new Date()),
       };
     });
@@ -890,6 +924,48 @@ app.get("/api/latest", async (_req, res) => {
     return res.json(out);
   } catch (e) {
     if (e.code === "NO_COOKIE") return res.status(503).json({ error: e.message });
+    return res.status(500).json({ error: "Falha interna." });
+  }
+});
+
+/* ── Relatório de um dia (o bot manda às 00h) ──
+   Diferente do /api/analytics, AQUI a busca é nova e é esperada: as 25 páginas
+   são lidas depois da virada, então as vendas das 23:59 entram no dia certo.
+   Pode levar 1-3 min (fila do Roblox) — o bot espera com timeout maior. */
+app.get("/api/daily-report", async (req, res) => {
+  if (!COOKIE_RAW) return res.status(503).json({ error: "Conexão com o Roblox indisponível no servidor." });
+  const dateKey = req.query.date || spDateKey(new Date());
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(dateKey)) return res.status(400).json({ error: "Data inválida." });
+  const y = new Date(dateKey + "T12:00:00"); y.setDate(y.getDate() - 1);
+  const prevKey = spDateKey(y);
+  try {
+    const got = await salesFresh();
+    const txs = got.txs || [];
+    if (got.error && !txs.length) return res.status(503).json({ error: "Dados indisponíveis.", status: got.error.status });
+    const doDia = txs.filter((t) => spDateKey(t.created) === dateKey);
+    const doAnterior = txs.filter((t) => spDateKey(t.created) === prevKey);
+    const soma = (l) => l.reduce((s, t) => s + getRobux(t), 0);
+    const horas = Array.from({ length: 24 }, () => 0);
+    doDia.forEach((t) => { horas[spHour(t.created)] += getRobux(t); });
+    const melhor = doDia.length ? horas.indexOf(Math.max(...horas)) : -1;
+    const rk = {};
+    doDia.forEach((t) => {
+      const a = getAsset(t); const k = String(a.id) + "|" + a.name;
+      rk[k] = rk[k] || { name: a.name, assetId: a.id, vendas: 0, robux: 0 };
+      rk[k].vendas++; rk[k].robux += getRobux(t);
+    });
+    const top = Object.values(rk).sort((a, b) => b.robux - a.robux).slice(0, 5);
+    const compradores = new Set(doDia.map((t) => t.agent && t.agent.name).filter(Boolean)).size;
+    return res.json({
+      date: dateKey, prevDate: prevKey,
+      sales: doDia.length, robux: soma(doDia),
+      ticket: doDia.length ? Math.round((soma(doDia) / doDia.length) * 100) / 100 : 0,
+      prevSales: doAnterior.length, prevRobux: soma(doAnterior),
+      melhorHora: melhor, horas, top, distintos: Object.keys(rk).length, compradores,
+      parcial: !!got.partial, savedAt: new Date().toISOString(),
+    });
+  } catch (e) {
+    L.warn("daily-report falhou", { err: e && e.message });
     return res.status(500).json({ error: "Falha interna." });
   }
 });
@@ -1012,9 +1088,60 @@ function buildPending(txs) {
 }
 
 /* ── log de acesso (lista pro comando /ips) ── */
+/* ── geolocalização ESTIMADA por IP (só pro /ips do bot) ──
+   Guarda por IP (nunca repete consulta) e persiste no store (data/store.json).
+   Se o serviço cair, mostra "localização indisponível" em vez de travar. */
+const geoMem = new Map(); // ip -> { at, val }
+const isPrivateIp = (ip) => !ip || /^(localhost|127\.|::1|192\.168\.|10\.|172\.(1[6-9]|2\d|3[01])\.|0\.0\.0\.0|\?|unknown)/i.test(String(ip).trim());
+async function geoLookup(ip) {
+  const key = String(ip || "").trim();
+  if (isPrivateIp(key)) return null;
+  const m = geoMem.get(key);
+  if (m && Date.now() - m.at < (m.val ? 24 * 3600e3 : 15 * 60e3)) return m.val;
+  try {
+    const saved = await store.read("geo:" + key, null);
+    if (saved && saved.val && Date.now() - (saved.at || 0) < 24 * 3600e3) {
+      geoMem.set(key, { at: saved.at, val: saved.val });
+      return saved.val;
+    }
+  } catch {}
+  let val = null;
+  try {
+    const r = await fetch("https://ipwho.is/" + encodeURIComponent(key), { signal: AbortSignal.timeout(7000) });
+    const d = await r.json();
+    if (d && d.success !== false && (d.city || d.region)) {
+      val = { city: d.city || null, region: d.region || null, country: d.country || null, cc: d.country_code || null };
+    }
+  } catch {}
+  if (!val) {
+    try {
+      const r2 = await fetch("https://ipapi.co/" + encodeURIComponent(key) + "/json/", { signal: AbortSignal.timeout(7000) });
+      const d2 = await r2.json();
+      if (d2 && !d2.error && (d2.city || d2.region)) {
+        val = { city: d2.city || null, region: d2.region || null, country: d2.country_name || null, cc: d2.country_code || null };
+      }
+    } catch {}
+  }
+  geoMem.set(key, { at: Date.now(), val });
+  if (val) store.write("geo:" + key, { at: Date.now(), val }).catch(() => {});
+  return val;
+}
+
 app.get("/api/access-log", async (req, res) => {
   const log = await store.read("accessLog", []);
-  res.json({ items: log.slice(0, 30) });
+  /* IPs DISTINTOS: o log vem do mais recente pra mais antigo, entao a primeira
+     aparência de cada IP já é o acesso mais novo dele. */
+  const uniq = new Map();
+  for (const e of log) {
+    const ip = String((e && e.ip) || "?");
+    if (uniq.has(ip)) { uniq.get(ip).count++; continue; }
+    uniq.set(ip, { ip, count: 1, when: (e && e.when) || "", page: (e && e.page) || "", ua: (e && e.ua) || "" });
+  }
+  const unique = [...uniq.values()].sort((a, b) => b.count - a.count).slice(0, 25);
+  try {
+    await Promise.all(unique.map(async (u) => { u.geo = await geoLookup(u.ip); }));
+  } catch {}
+  res.json({ items: log.slice(0, 30), unique, total: log.length });
 });
 
 /* ── log de acesso (avisa no Discord quando alguem entra no painel) ── */
@@ -1031,7 +1158,9 @@ app.post("/api/access-log", async (req, res) => {
     await store.write("accessLog", log.slice(0, 200));
   } catch {}
   if (global.__btdNotifyAccess) {
-    setTimeout(() => { try { global.__btdNotifyAccess({ ip, ua, page, when }); } catch {} }, 300);
+    let geo = null;
+    try { geo = await geoLookup(ip); } catch {}
+    setTimeout(() => { try { global.__btdNotifyAccess({ ip, ua, page, when, geo }); } catch {} }, 300);
   }
 });
 
@@ -1069,7 +1198,9 @@ app.get("/api/product/:assetId/sales", async (req, res) => {
 
 // Análise completa do dia (a assistente mostra no painel)
 async function buildDaily(dateKey) {
-  const got = await fetchSalesPages(5);
+  // usa o cache grande (25 páginas) em vez de uma busca nova de 5: mesmo dado,
+  // MUITO mais completo e sem gastar fila do Roblox a cada chamada do painel
+  const got = await salesCached();
   if (got.error) return { error: true };
   const txs = got.txs;
   const y = new Date(dateKey + "T12:00:00"); y.setDate(y.getDate() - 1);

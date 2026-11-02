@@ -234,7 +234,7 @@ addEventListener("online",()=>{ typeof MB_toast==="function"&&MB_toast("Internet
 </main>
 
 <script>
-let DAYS=1, CUSTOM=null, DATA=null, LAST_TX=null, chartType={dia:"bar",hora:"bar",dia2:"bar"};
+let DAYS=1, CUSTOM=null, DATA=null, LAST_TX=null, MINI_TX=null, chartType={dia:"bar",hora:"bar",dia2:"bar"};
 let memCursor="", memLoaded=[], memRole="", ALL_TX=[], ALL_MODE=false;
 // ── sessão: sem login, vai para a tela de senha ──
 (async()=>{ try{ const r=await fetch("/api/me"); if(r.status===401||r.status===503){
@@ -528,11 +528,13 @@ if(a.partial||a.sales==null||a.stale){
 if(a.offline){ $("status").textContent="⚠ Sem internet — mostrando os últimos dados salvos"; }
 if(!a.partial&&a.sales!=null) window._fails=0;
 const prevFirst=LAST_TX;
-const isNew=prevFirst&&a.transactions.length&&a.transactions[0].id!==prevFirst;
-if(a.transactions.length){
-LAST_TX=a.transactions[0].id;
+const curId=a.transactions.length?String(a.transactions[0].id):null;
+/* só anda PRA FRENTE: um cache velho do dashboard nunca rebaixa o "visto",
+   senão o site re-alertava uma venda antiga. */
+const newer=!!curId&&(!prevFirst||curId>String(prevFirst));
+const isNew=!!prevFirst&&newer;
+if(curId&&newer) LAST_TX=curId;
 if(isNew){ const t=a.transactions[0]; saleAlert(t); loadDaily(); loadBalance(true); }
-}
 DATA=a; ALL_MODE=false;
 $("connection").textContent="Ligado";
 const when=a.savedAt?new Date(a.savedAt).toLocaleString("pt-BR",{day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}):"";
@@ -567,8 +569,16 @@ const pool=(DATA?.salesList&&DATA.salesList.length?DATA.salesList:(DATA?.transac
 const all=pool.filter(t=>(t.buyerName||"").toLowerCase().includes(q)||(t.assetName||"").toLowerCase().includes(q));
 const tx=all.slice(0,500);
 $("txwrap").innerHTML=tx.length?`<table class="datatable"><tr><th>Horário</th><th>Item</th><th>Comprador</th><th style="text-align:right">Valor</th></tr>${tx.map(txRow).join("")}</table><div class="csvbar"><button class="fbtn" onclick="exportCsv()">⤓ Baixar CSV</button><p class="msg">Mostrando ${tx.length} de ${fmt(all.length)} no filtro.</p></div>`:"<p class='msg'>Nada neste filtro.</p>";
-const mini=(DATA?.transactions||[]).slice(0,5);
-$("tx-mini").innerHTML=mini.length?`<table class="datatable">${mini.map(txRow).join("")}</table>`:"<p class='msg'>Sem vendas ainda.</p>";
+paintMini();
+}
+/* Mini-lista "Últimas vendas": usa a lista MAIS FRESCA disponível — a do
+   dashboard (que demora minutos por causa do 429) ou a de /api/latest (1
+   página, atualiza em ~45s). Assim a última venda aparece rápido. */
+function paintMini(){
+const a=Array.isArray(MINI_TX)?MINI_TX:[];
+const b=DATA?.transactions||[];
+const list=(a.length&&(!b.length||String(a[0].id)>String(b[0].id)))?a:b;
+$("tx-mini").innerHTML=list.length?`<table class="datatable">${list.slice(0,5).map(txRow).join("")}</table>`:"<p class='msg'>Sem vendas ainda.</p>";
 }
 function renderTxAll(q){
 q=(q||"").toLowerCase();
@@ -822,11 +832,18 @@ $("memList").innerHTML=list.length?`<table class="datatable"><tr><th>ID</th><th>
 async function loadAll(){ if(!(await brGate())) return; applyTheme(); checkMetaSoon(); await loadGroup(); await loadAnalytics(); loadTodosPreview(); loadDaily(); loadChatHistory(); loadGoals(); mbLogAccess(); }
 if("serviceWorker" in navigator){ window.addEventListener("load",()=>{ try{ navigator.serviceWorker.register("/sw.js"); }catch{} }); }
 loadAll();
-setInterval(async()=>{ // vigia rápido: confere venda nova e atualiza na hora
+setInterval(async()=>{ // vigia rápido: puxa as vendas frescas e avisa na hora
 if(!isLeader()) return;
 try{
 const l=await (await api("/api/latest")).json();
-if(l.firstId&&LAST_TX&&String(l.firstId)!==String(LAST_TX)){ await loadAnalytics(); }
+const nx=(l.transactions||[])[0];
+if(nx){ MINI_TX=l.transactions; paintMini(); }   // mini-lista sempre fresca (~45s)
+if(nx&&LAST_TX&&String(nx.id)>String(LAST_TX)){
+  LAST_TX=String(nx.id);
+  saleAlert(nx); loadDaily(); loadBalance(true);
+  const now=Date.now();
+  if(now-(window._lastNew||0)>45000){ window._lastNew=now; await loadAnalytics(); } // no máx. 1x/45s
+}
 }catch{}
 },30000);
 setInterval(()=>{ if(isLeader()){ loadAnalytics(); loadBalance(); } },60000);
