@@ -399,7 +399,8 @@ module.exports = function startBot(opts) {
       } else if (n === "compradores") {
         const a = await api("/api/analytics?days=30");
         const by = {};
-        for (const t of (a.transactions || [])) {
+        /* salesList = vendas do período inteiro (transactions tem só 100) */
+        for (const t of (a.salesList && a.salesList.length ? a.salesList : (a.transactions || []))) {
           const nm = t.buyerName || "?";
           by[nm] = by[nm] || { name: nm, id: t.buyerId, vendas: 0, robux: 0 };
           by[nm].vendas++; by[nm].robux += t.robux || 0;
@@ -454,14 +455,19 @@ module.exports = function startBot(opts) {
 
       } else if (n === "horario") {
         const a = await api("/api/analytics?days=30");
-        const txs = a.salesList || a.transactions || [];
-        if (!txs.length) return void await it.editReply({ embeds: [sincronizando()] });
-        const horas = Array.from({ length: 24 }, () => ({ n: 0, r: 0 }));
-        const fmtH = new Intl.DateTimeFormat("en-US", { timeZone: SP, hour: "numeric", hour12: false });
-        for (const t of txs) {
-          const p = fmtH.formatToParts(new Date(t.created));
-          const h = (parseInt((p.find((x) => x.type === "hour") || {}).value || "0", 10) || 0) % 24;
-          horas[h].n++; horas[h].r += t.robux || 0;
+        /* byHourPeriodo vem do servidor com TODAS as vendas do período (a lista
+           de linhas é cortada em 5000 pra não pesar o payload). */
+        let horas = (a.byHourPeriodo || []).map((h) => ({ n: h.n || 0, r: h.robux || 0 }));
+        if (!horas.some((h) => h.n)) {
+          const txs = a.salesList || a.transactions || [];
+          if (!txs.length) return void await it.editReply({ embeds: [sincronizando()] });
+          horas = Array.from({ length: 24 }, () => ({ n: 0, r: 0 }));
+          const fmtH = new Intl.DateTimeFormat("en-US", { timeZone: SP, hour: "numeric", hour12: false });
+          for (const t of txs) {
+            const p = fmtH.formatToParts(new Date(t.created));
+            const h = (parseInt((p.find((x) => x.type === "hour") || {}).value || "0", 10) || 0) % 24;
+            horas[h].n++; horas[h].r += t.robux || 0;
+          }
         }
         const comDados = horas.map((h, i) => ({ i, n: h.n, r: h.r })).filter((h) => h.n > 0);
         if (!comDados.length) return void await it.editReply({ embeds: [emb(C.vendas, "🕐  Horários", "Sem vendas no período.")] });
@@ -484,6 +490,7 @@ module.exports = function startBot(opts) {
         e.addFields(
           { name: "Última leitura", value: salvo ? `${horaSP(salvo)} (SP) • há ${min} min` : "—", inline: true },
           { name: "Vendas hoje", value: `${fmtN(a.todayCount)} • ${fmtR(a.revenueToday)}`, inline: true },
+          { name: "Histórico", value: a.historiaCompleta === false ? `⏳ completando (${a.profundidade ?? 0} dias)` : `${a.profundidade ?? 0} dias sem cap`, inline: true },
           { name: "Pendente", value: p ? fmtR(p.pendingRobux ?? p.totalPending) : "—", inline: true },
           { name: "Disponível", value: b && b.disponivel != null ? fmtN(b.disponivel) : "—", inline: true },
           { name: "Aviso", value: min != null && min > 3 ? "Dados com mais de 3 min — o Roblox pode estar limitando." : "Atualizando normalmente.", inline: false }

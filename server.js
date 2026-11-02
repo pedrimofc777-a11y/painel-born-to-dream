@@ -346,14 +346,17 @@ app.get("/api/export/csv", async (req, res) => {
     const r = await fetch("http://127.0.0.1:" + PORT + "/api/analytics?" + q, { headers: { cookie: req.headers.cookie || "", authorization: req.headers.authorization || "" } });
     const a = await r.json();
     const rows = [["Data", "Hora", "Item", "ID do item", "Comprador", "ID do comprador", "Robux"]];
-    (a.transactions || []).forEach((t) => {
+    /* salesList = TODAS as vendas do período (sem cap de 2500). Antes ia em
+       transactions, que tem só 100 — e ainda por cima era o cru, sem nome. */
+    const lista = (a.salesList && a.salesList.length ? a.salesList : a.transactions) || [];
+    lista.forEach((t) => {
       const d = new Date(t.created);
       const sp = new Intl.DateTimeFormat("pt-BR", { timeZone: "America/Sao_Paulo", day: "2-digit", month: "2-digit", year: "numeric", hour: "2-digit", minute: "2-digit" }).formatToParts(d);
       const g = (ty) => (sp.find((p) => p.type === ty) || {}).value || "";
       rows.push([
         `${g("day")}/${g("month")}/${g("year")}`,
         `${g("hour")}:${g("minute")}`,
-        t.assetName || "", t.assetId || "", t.buyerName || "", t.buyerId || "", getRobux(t),
+        t.assetName || "", t.assetId || "", t.buyerName || "", t.buyerId || "", t.robux || 0,
       ]);
     });
     const csv = "\uFEFF" + rows.map((r2) => r2.map(csvCell).join(";")).join("\r\n");
@@ -619,9 +622,9 @@ function spWeekdayShort(dateKey) {
   } catch { return ""; }
 }
 
-async function fetchSalesPages(maxPages = 10, untilDate = null) {
+async function fetchSalesPages(maxPages = 10, untilDate = null, cursor0 = "") {
   const txs = [];
-  let cursor = "";
+  let cursor = String(cursor0 || ""); // cursor da PRÓXIMA página a buscar
   for (let page = 0; page < maxPages; page++) {
     const url = new URL(`https://economy.roblox.com/v2/groups/${encodeURIComponent(GROUP_ID)}/transactions`);
     url.searchParams.set("transactionType", "Sale");
@@ -636,12 +639,13 @@ async function fetchSalesPages(maxPages = 10, untilDate = null) {
     }
     if (!r.ok) {
       /* NÃO é tudo-ou-nada: se já coletamos páginas, devolve o que temos
-         marcado como parcial. Um 429 na página 12 não pode zerar as 11 anteriores. */
+         marcado como parcial. Um 429 na página 12 não pode zerar as 11 anteriores.
+         `cursor` aponta para a página que FALTOU — dá pra retomar exatamente dali. */
       if (txs.length > 0) {
         L.warn("vendas parcial: falha na página " + (page + 1) + "/" + maxPages, { status: r.status, txs: txs.length });
-        return { txs, partial: true, status: r.status };
+        return { txs, partial: true, status: r.status, cursor };
       }
-      return { error: { status: r.status, data: d } };
+      return { error: { status: r.status, data: d }, cursor };
     }
     const items = Array.isArray(d.data) ? d.data : [];
     for (const t of items) txs.push(t);
@@ -653,7 +657,163 @@ async function fetchSalesPages(maxPages = 10, untilDate = null) {
       if (!isNaN(last) && last < untilDate) break;
     }
   }
-  return { txs };
+  return { txs, cursor };
+}
+
+/* ═══════════════════════════════════════════════════════════════════════
+   ARQUIVO DE VENDAS  —  tira o cap de 2500 / 2499
+   ────────────────────────────────────────────────────────────────────────
+   O Roblox devolve 100 transações por página e NÃO tem filtro de data:
+   cobrir 90 dias são ~250 páginas. Antes a gente refazia 25 páginas a cada
+   minuto, então:
+     • o número travava em 2500 (25 páginas × 100) — e em 2499 quando o 429
+       derrubava a última página;
+     • a fila do economy ficava saturada por minutos (era isso que atrasava
+       a "última venda" em 5-7 min).
+   Agora acumulamos:
+     • topo : só as páginas NOVAS de cada rodada (1 página = 100 vendas ≈
+              8 h de vendas do grupo → folga enorme, nunca abre buraco);
+     • fundo: continua do cursor SALVO, em blocos pequenos, em 2º plano.
+   Depois do varredura inicial cada rodada custa UMA requisição: a fila
+   respira e os números não têm mais cap (até 90 dias).
+   ═══════════════════════════════════════════════════════════════════════ */
+const ARQ_FILE = path.join(DATA_DIR, "arquivo.json");
+const ARQ_MAX_DIAS = 90;    // o painel deixa escolher até 90 dias
+const ARQ_CHEIA = 30;       // páginas no primeiro preenchimento (≈ as 25 de antes)
+const ARQ_BLOCO = 6;        // páginas por bloco do varredor de fundo
+const ARQ_RESPIRO = 15000;  // pausa entre blocos (deixa o topo respirar)
+const arquivo = { txs: [], cursor: "", feito: false, rodando: false, salvoEm: 0 };
+try {
+  const j = JSON.parse(fs.readFileSync(ARQ_FILE, "utf8"));
+  if (Array.isArray(j.txs)) {
+    arquivo.txs = j.txs;
+    arquivo.cursor = typeof j.cursor === "string" ? j.cursor : "";
+    arquivo.feito = !!j.feito;
+  }
+} catch {}
+/** transação compacta: só o que o painel/bot usam (~230 B contra ~600 B cru) */
+function compactTx(t) {
+  const d = t.details || t.assetDetails || {};
+  const a = t.agent || {};
+  return {
+    created: t.created,
+    currencyAmount: getRobux(t),
+    details: { id: d.id ?? t.assetId ?? null, name: d.name || t.assetName || "Item" },
+    agent: { id: a.id ?? null, name: a.name ?? null, type: a.type ?? null },
+    isPending: !!t.isPending,
+  };
+}
+const cmpDesc = (a, b) => (a.created < b.created ? 1 : a.created > b.created ? -1 : 0);
+/** corta o que já passou de 90 dias (o fundo anda sozinho com o tempo) */
+function recortarArquivo() {
+  if (arquivo.txs.length < 2) return;
+  const corte = Date.now() - (ARQ_MAX_DIAS + 3) * 86400000;
+  let i = arquivo.txs.length - 1;
+  while (i >= 0 && (Date.parse(arquivo.txs[i].created) || 0) < corte) i--;
+  if (i < arquivo.txs.length - 1) arquivo.txs = arquivo.txs.slice(0, i + 1); // pode ficar vazio
+}
+/**
+ * Junta novas transações no arquivo SEM repetir nenhuma.
+ * Contagem por `created` (não Set): duas vendas no mesmo milissegundo são
+ * preservadas — só descartamos as que já estão na mesma quantidade.
+ */
+function fundir(novas) {
+  if (!novas || !novas.length) return;
+  if (!arquivo.txs.length) { arquivo.txs = novas.slice(); recortarArquivo(); return; }
+  const cont = new Map();
+  for (const t of arquivo.txs) cont.set(t.created, (cont.get(t.created) || 0) + 1);
+  const novos = [];
+  for (const t of novas) {
+    const n = cont.get(t.created) || 0;
+    if (n > 0) cont.set(t.created, n - 1); // já temos uma igual
+    else novos.push(t);
+  }
+  if (novos.length) arquivo.txs = novos.concat(arquivo.txs).sort(cmpDesc);
+  recortarArquivo();
+}
+/** dias de vendas cobertos do fundo até agora (serve pro painel avisar) */
+function arquivoDias() {
+  if (!arquivo.txs.length) return 0;
+  const b = Date.parse(arquivo.txs[arquivo.txs.length - 1].created);
+  if (isNaN(b)) return 0;
+  return Math.max(0, (Date.now() - b) / 86400000);
+}
+/** profundidade real da varredura (topo do arquivo até o fundo) */
+function varreduraDias() {
+  if (arquivo.txs.length < 2) return 0;
+  const a = Date.parse(arquivo.txs[0].created);
+  const b = Date.parse(arquivo.txs[arquivo.txs.length - 1].created);
+  if (isNaN(a) || isNaN(b)) return 0;
+  return Math.max(0, (a - b) / 86400000);
+}
+/** grava o arquivo (compacto, atômico) — só muda de verdade no varredor */
+function salvarArquivo(force) {
+  if (!force && Date.now() - arquivo.salvoEm < 120000) return;
+  arquivo.salvoEm = Date.now();
+  try {
+    const tmp = ARQ_FILE + ".tmp";
+    fs.writeFileSync(tmp, JSON.stringify({ txs: arquivo.txs, cursor: arquivo.cursor, feito: arquivo.feito }));
+    fs.renameSync(tmp, ARQ_FILE);
+  } catch (e) { L.warn("não gravou arquivo.json", { err: e && e.message }); }
+}
+/** quantas páginas do TOPO precisamos para não abrir buraco no arquivo */
+function paginasTopo() {
+  if (!arquivo.txs.length) return ARQ_CHEIA;
+  const t = Date.parse(arquivo.txs[0].created);
+  if (isNaN(t)) return ARQ_CHEIA;
+  const horas = (Date.now() - t) / 3600000;
+  if (horas > 24 * 14) { // sumiu há 2+ semanas: sai mais barato refazer do zero
+    arquivo.txs = []; arquivo.cursor = ""; arquivo.feito = false;
+    return ARQ_CHEIA;
+  }
+  if (horas <= 1) return 1;
+  /* teto conservador de 25 vendas/hora (o grupo faz ~276/dia): 1 página
+     cobre 100 vendas ≈ 4 h nesse teto, então uma rodada de 1 min nunca abre buraco. */
+  return Math.max(1, Math.min(240, Math.ceil((horas * 25) / 100) + 1));
+}
+/** quanto do histórico o arquivo cobre pro período pedido (o painel avisa) */
+function profundidade(dayKeys) {
+  const dias = arquivoDias();
+  return {
+    profundidade: Math.floor(dias),
+    historiaCompleta: !!(dayKeys && dayKeys.length) && dias >= dayKeys.length - 1,
+  };
+}
+/** varre o fundo em blocos, SEM travar quem pediu dado */
+async function estenderArquivo() {
+  if (arquivo.rodando || arquivo.feito) return;
+  arquivo.rodando = true;
+  try {
+    let parado = 0;
+    while (!arquivo.feito) {
+      const r = await fetchSalesPages(ARQ_BLOCO, null, arquivo.cursor);
+      if (r.error) {
+        const st = r.error.status;
+        if (st === 400 || st === 404 || st === 410) {
+          L.warn("varredura: cursor recusado pelo Roblox, reinicia do topo", { status: st });
+          arquivo.cursor = ""; // refaz do topo (fundir é idempotente)
+        } else {
+          L.warn("varredura: página falhou, tenta de novo na próxima rodada", { status: st });
+        }
+        break;
+      }
+      if (r.txs && r.txs.length) fundir(r.txs.map(compactTx));
+      arquivo.cursor = r.cursor || "";
+      if (!r.cursor) arquivo.feito = true;                    // acabou o histórico
+      else if (varreduraDias() >= ARQ_MAX_DIAS) arquivo.feito = true; // cobriu 90 dias
+      if (!r.txs || !r.txs.length) {
+        if (++parado > 3) arquivo.feito = true; // a API não entrega mais nada
+      } else parado = 0;
+      salvarArquivo();
+      if (arquivo.feito) break;
+      await new Promise((rr) => setTimeout(rr, ARQ_RESPIRO));
+    }
+  } catch (e) {
+    L.warn("varredura do arquivo falhou", { err: e && e.message });
+  } finally {
+    arquivo.rodando = false;
+    if (arquivo.feito) { arquivo.salvoEm = 0; salvarArquivo(true); } // só ao concluir
+  }
 }
 
 // GET /api/analytics?days=7 | ?start=2026-09-01&end=2026-10-07
@@ -675,7 +835,19 @@ const refreshing = new Set(); // akeys com refresh em voo (evita rajada no cold 
  * que é o tempo que o Roblox aguenta sem limitar.
  */
 function salesFull() {
-  return once("sales:full", () => fetchSalesPages(25, null));
+  return once("sales:full", async () => {
+    /* topo: só as páginas novas desde a última rodada (1 = 100 vendas ≈ 8 h).
+       O resto está no arquivo, então uma rodada passa a custar UMA chamada. */
+    const vazio = !arquivo.txs.length;
+    const got = await fetchSalesPages(paginasTopo(), null, "");
+    if (got.txs && got.txs.length) fundir(got.txs.map(compactTx));
+    if (vazio && !arquivo.rodando) arquivo.cursor = got.cursor || "";
+    if (!arquivo.txs.length) return got.error ? got : { txs: [] }; // nada ainda
+    salvarArquivo();
+    if (!arquivo.feito) estenderArquivo().catch(() => {}); // fundo em 2º plano
+    if (got.error) return { txs: arquivo.txs, partial: true, status: got.error.status };
+    return { txs: arquivo.txs, partial: !!got.partial, status: got.status };
+  });
 }
 /** atualiza em 2º plano: nunca bloqueia quem pediu dado */
 function refreshSalesInBackground() {
@@ -779,7 +951,7 @@ app.get("/api/analytics", async (req, res) => {
   return res.json({
     available: true, partial: true, sales: null, days: dayKeys.length, range: label,
     official: null, byDay: [], byHour: [], transactions: [], salesList: [], ranking: [], todayList: [],
-    retryAfter: 20000,
+    retryAfter: 20000, ...profundidade(dayKeys),
   });
 });
 
@@ -799,13 +971,12 @@ async function refreshAnalytics(akey, dayKeys, label) {
         month: monthR.ok ? sumRevenue(await readJson(monthR)) : null,
       };
     });
-    const pages = 25;
     const got = await salesCached();
     if (got.error) {
       L.warn("falha ao buscar vendas", { status: got.error.status });
       partialFails.set(akey, fails + 1);
       const wait = expo(fails, 15000, 300000);
-      const out = { available: true, partial: true, days: dayKeys.length, range: label, official, sales: null, ticketMedio: null, byDay: [], byHour: [], transactions: [], txError: got.error.status || "?", retryAfter: wait };
+      const out = { available: true, partial: true, days: dayKeys.length, range: label, official, sales: null, ticketMedio: null, byDay: [], byHour: [], transactions: [], txError: got.error.status || "?", retryAfter: wait, ...profundidade(dayKeys) };
       cache.set(akey, { at: Date.now(), data: out });
       return out;
     }
@@ -828,8 +999,16 @@ async function refreshAnalytics(akey, dayKeys, label) {
     const byDay = dayKeys.map((k) => ({ date: k, label: `${k.slice(8, 10)}/${k.slice(5, 7)}`, weekday: spWeekdayShort(k), robux: byDayMap[k] || 0 }));
     const byHour = Array.from({ length: 24 }, (_, h) => ({ hour: h, label: `${String(h).padStart(2, "0")}h`, robux: 0 }));
     todayTxs.forEach((t) => { byHour[spHour(t.created)].robux += getRobux(t); });
+    /* histograma por hora de TODO o período — o bot usa nos "melhores horários"
+       sem precisar baixar a lista inteira de transações. */
+    const byHourPeriodo = Array.from({ length: 24 }, (_, h) => ({ hour: h, label: `${String(h).padStart(2, "0")}h`, n: 0, robux: 0 }));
+    inPeriod.forEach((t) => { const h = spHour(t.created); byHourPeriodo[h].n++; byHourPeriodo[h].robux += getRobux(t); });
     const transactions = txs.slice(0, 100).map(mapTx);
-    const salesList = inPeriod.map(mapTx);
+    /* Só a LISTA de linhas tem limite (ela é o payload bruto que viaja a cada
+       atualização e é salva em disco). Vendas, total, por-dia, ranking e
+       ticket vêm do arquivo INTEIRO — sem cap de 2500. */
+    const LISTA_MAX = 5000;
+    const salesList = inPeriod.slice(0, LISTA_MAX).map(mapTx);
     const rankMap = {};
     inPeriod.forEach((t) => {
       const a = getAsset(t);
@@ -862,13 +1041,19 @@ async function refreshAnalytics(akey, dayKeys, label) {
       available: true, days: dayKeys.length, range: label, today: todaySp,
       revenueToday, todayCount: todayTxs.length, revenuePeriod: totalRobux, official,
       sales, salesTotalRobux: totalRobux, ticketMedio, savedAt: new Date().toISOString(),
-      byDay, byHour, transactions, salesList, ranking,
+      byDay, byHour, byHourPeriodo, transactions, salesList, ranking,
       todayList: todayTxs.slice(0, 500).map(mapTx),
+      listaCortada: salesList.length < inPeriod.length,
+      ...profundidade(dayKeys),
     };
-    // grava em memória + disco + KV (se ligado)
+    /* grava em memória + disco + KV (se ligado).
+       A lista de linhas fica de fora do disco: 90 dias são ~25 mil vendas e
+       o store.json é reescrito a cada gravação. Depois do restart o painel
+       recarrega os totais na hora e a lista completa volta em 1 rodada. */
+    const salvo = out.salesList.length > 600 ? { ...out, salesList: out.salesList.slice(0, 600), listaCortada: true } : out;
     cache.set(akey, { at: Date.now(), data: out });
-    saveDiskCache({ [akey]: { at: Date.now(), data: out } });
-    store.write(akey, out).catch(() => {});
+    saveDiskCache({ [akey]: { at: Date.now(), data: salvo } });
+    store.write(akey, salvo).catch(() => {});
     return out;
   } catch (e) {
     if (e && e.code === "NO_COOKIE") {
@@ -981,15 +1166,18 @@ async function officialPendingRobux() {
   });
   return o && o.robux != null ? o.robux : null;
 }
-/** aplica o valor OFICIAL ao payload e destrava a contagem (estimada pela
- *  média de preço das pendentes parciais — a paginação do 429 capava em 2499). */
+/** aplica o valor OFICIAL ao payload e destrava a contagem.
+ *  A soma bruta conta TODA transação da janela (não só as realmente em hold),
+ *  então ela só serve pra tirar o PREÇO MÉDIO. A contagem é o valor oficial
+ *  ÷ preço médio — é o número que já aparecia no painel e que bate com o
+ *  saldo do Roblox (usar o max() inflaria com o arquivo de 90 dias). */
 function applyOfficialPending(out, auth) {
   if (auth == null) return out;
   const media = out.pendingCount > 0 && out.pendingRobux > 0 ? out.pendingRobux / out.pendingCount : 0;
   out.pendingRobux = auth;
   out.totalPending = auth;
   out.oficial = true;
-  if (media > 0) out.pendingCount = Math.max(out.pendingCount, Math.round(auth / media));
+  if (media > 0) out.pendingCount = Math.max(1, Math.round(auth / media));
   return out;
 }
 
@@ -1022,9 +1210,8 @@ app.get("/api/pending", async (req, res) => {
       return res.status(503).json({ error: "Dados indisponíveis agora (limite do Roblox).", retryAfter: 60000 });
     }
     const out = buildPending(got.txs);
-    /* contagem: a paginação do 429 só entrega ~2500 transações, então a soma
-       parcial "trava" em 2499 e não bate com os 45k. applyOfficialPending põe o
-       valor oficial e destrava a contagem (estimada pelo preço médio). */
+    /* o valor vem OFICIAL do Roblox e a contagem = valor ÷ preço médio
+       (applyOfficialPending). A soma bruta só serve pra achar a média. */
     applyOfficialPending(out, auth);
     await store.write("pending", { at: Date.now(), data: out });
     return res.json(out);
@@ -1054,11 +1241,15 @@ async function refreshPending() {
 /** monta o payload de pendentes/previsão a partir das transações */
 function buildPending(txs) {
     const now = new Date();
+    /* hold de ~30 dias: transação mais velha que isso já caiu. Sem este corte
+       o arquivo (que agora guarda até 90 dias) inflaria a contagem. */
+    const corte = now.getTime() - 30 * 86400000;
     const rel = {};
     let pendingCount = 0, pendingRobux = 0;
     const pendList = [];
     for (const t of txs) {
       if (!t.isPending) continue;
+      if ((Date.parse(t.created) || 0) < corte) continue;
       pendingCount++;
       const robux = getRobux(t);
       pendingRobux += robux;
@@ -1082,7 +1273,7 @@ function buildPending(txs) {
       proximo: proximo ? { date: proximo[0], robux: proximo[1], emDias: daysTo } : null,
       atrasado: past.length ? { date: past[0][0], robux: past[0][1] } : null,
       porData: [...future.slice(0, 12), ...past.slice(0, 4)].map(([date, robux]) => ({ date, robux, futuro: date >= today })),
-      items: pendList,
+      items: pendList.slice(0, 400), // só debug: painel e bot usam porData/upcoming
       savedAt: new Date().toISOString(),
     };
 }
@@ -1167,7 +1358,9 @@ app.post("/api/access-log", async (req, res) => {
 // Vendas de um produto (dias + compradores)
 app.get("/api/product/:assetId/sales", async (req, res) => {
   try {
-    const got = await cached("sales:10", 180000, () => fetchSalesPages(10));
+    /* sai do ARQUIVO (90 dias) em vez de refazer 10 páginas a cada 3 min:
+       era 3,3 chamadas/min só pra isso, e ainda assim cobria ~3,6 dias. */
+    const got = await salesCached();
     if (got.error) return res.status(503).json({ error: "Dados indisponíveis." });
     const id = String(req.params.assetId);
     let list = got.txs.filter((t) => String(getAsset(t).id) === id);
